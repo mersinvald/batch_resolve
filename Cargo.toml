@@ -1,0 +1,13 @@
+[package]
+name = "rkn_resolver"
+version = "0.1.0"
+authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
+
+[dependencies]
+futures = "*"
+futures-cpupool = "*"
+nix = "*"
+error-chain = "*"
+threadpool = "1.0"
+trust-dns = "0.10"
+tokio-core = "*"
