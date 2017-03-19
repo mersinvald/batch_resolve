@@ -10,6 +10,8 @@ pub enum ResolverError {
     Io(::std::io::Error)
 }
 
+unsafe impl Send for ResolverError {}
+
 impl fmt::Display for ResolverError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {

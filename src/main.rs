@@ -1,3 +1,6 @@
+#![feature(conservative_impl_trait)]
+#![feature(box_syntax)]
+
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
@@ -26,75 +29,99 @@ use futures::Sink;
 use futures::Stream;
 use futures::future::{poll_fn, lazy};
 use futures::Async;
+use futures::stream;
+use std::iter;
+use std::env;
+use std::io::stdout;
 
 use error::*;
 use resolver::*;
 
-fn resolve<'a, F>(loop_handle: Handle, tx: mpsc::Sender<String>, input: HashSet<String>, mut resolve_fn: F) 
-    where F: FnMut(&str) -> Box<Future<Item=Vec<String>, Error=ResolverError>>
-
+fn resolve<F>(input: HashSet<String>, mut resolve_fn: F) 
+    -> Box<Stream<Item=Option<Vec<DnsData>>, Error=ResolverError>>
+    where F: FnMut(&str) -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>> + 'static,
 {
-    for item in input.iter() {
-        let tx = tx.clone();
-        loop_handle.spawn(
-            resolve_fn(&item).and_then(|results| {
-                for result in results.into_iter() {
-                    // use of moved value: `tx`
-                    // value moved here in previous iteration of loop
-                    tx.send(result);
-                }   
-                Ok(())
-            }).map_err(|_| ())
-        );    
-    }
-}
-
-fn receive(loop_handle: Handle, rx: mpsc::Receiver<String>, original: HashSet<String>, filename: String) {
-    loop_handle.spawn(
-        rx.for_each(move |item| {
-            // cannot borrow captured outer variable in an `FnMut` closure as mutable
-            original.insert(item);
-            Ok(())
-        }).and_then(|_| {
-            // capture of moved value: `original`
-            // value captured here after move
-            write_file(original, filename);
-            Ok(())
-        })
-    )
+    let stream = stream::iter::<_, _, ResolverError>(input.into_iter().map(|x| Ok(x)))
+                 .map(move |to_resolve| resolve_fn(&to_resolve))
+                 .buffer_unordered(10);
+    Box::new(stream)
 }
 
 fn main() {
+    let domains_src_filename = env::args().nth(1).unwrap();
+    let domains_dst_filename = env::args().nth(2).unwrap();
+    let hosts_src_filename   = env::args().nth(3).unwrap();
+    let hosts_dst_filename   = env::args().nth(4).unwrap();
+
+    let dns_servers = vec![
+        "8.8.8.8:53".parse().unwrap(),        // Google primary
+        "8.8.4.4:53".parse().unwrap(),        // Google secondary
+    ];
+
     // Synchronously load files
     let (mut domains, mut ips) = (
-        load_file("data/domains.txt").unwrap(),
-        load_file("data/hosts.txt").unwrap()
+        load_file(domains_src_filename).unwrap(),
+        load_file(hosts_src_filename).unwrap()
     );
 
-    // Create Tokio Core
-    let mut lp = Core::new().unwrap();
-    let handle = lp.handle();
+    let overall_count = ips.len() + domains.len();
+    let mut done_count = 0;
 
-    // Create mpsc channels to get results from tasks
-    let (domains_tx, domains_rx) = mpsc::channel(1024);
-    let (ips_tx, ips_rx) = mpsc::channel(1024);
-        
-        
-    // Create resolvers with different DNS servers
-    let mut resolver1 = TrustDNSResolver::new("8.8.8.8".parse().unwrap(), handle.clone());
-    let mut resolver2 = TrustDNSResolver::new("8.8.4.4".parse().unwrap(), handle.clone());
+    {
+        // Create Tokio Core
+        let mut lp = Core::new().unwrap();
+        let handle = lp.handle();
 
-    // Spawn async receivers, move cloned data there
-    receive(handle.clone(), domains_rx, domains.clone(), String::from("data/domains.out"));
-    receive(handle.clone(), ips_rx,     ips.clone(),     String::from("data/hosts.out"));
-       
-    // Spawn resolvers and move loaded data there
-    resolve(handle.clone(), domains_tx, ips,     |item| resolver1.reverse_resolve(item));
-    resolve(handle.clone(), ips_tx,     domains, |item| resolver2.resolve(item));
+        // Create progress mpscs
+        let (done_tx, done_rx) = mpsc::channel(1024);
+
+        // Create resolvers with different DNS servers
+        let mut resolver1 = TrustDNSResolver::new(dns_servers.clone(), handle.clone(), done_tx.clone());
+        let mut resolver2 = TrustDNSResolver::new(dns_servers.clone(), handle.clone(), done_tx);
     
-    lp.run(/* What do I pass here if I spawned every task with handle? */);
+        // Spawn resolvers and move loaded data there
+        let domains_future = resolve(ips.clone(), move |item| resolver1.reverse_resolve(item));
+        let ips_future = resolve(domains.clone(), move |item| resolver2.resolve(item));
 
-    // How can I get back my HasSet I moved to receivers?
+
+        let domains_collect_future = domains_future.filter(Option::is_some)
+                                           .map(Option::unwrap)
+                                           .for_each(|vec| 
+        {    
+            for mut result in vec.into_iter() {
+                println!("{:?}", result);
+                result.take_name().map(|name|domains.insert(name));
+            }
+            Ok(())
+        });
+
+       /* let ips_collect_future = ips_future.filter(Option::is_some)
+                                           .map(Option::unwrap)
+                                           .for_each(|vec| 
+        {    
+            for mut result in vec.into_iter() {
+                result.take_ip().map(|ip|ips.insert(ip));
+            }
+            Ok(())
+        });
+        */
+        
+        handle.spawn(done_rx.for_each(move |_| {
+            done_count += 1;
+            if done_count % 10 == 0 || done_count == overall_count {
+                print!("{}/{}\r", done_count, overall_count);
+                stdout().flush().unwrap();
+            }
+            Ok(())
+        }));
+
+        //let task = domains_collect_future.join(ips_collect_future);
+        let task = domains_collect_future;
+        lp.run(task).unwrap();
+    }
+
+    write_file(domains.into_iter(), domains_dst_filename).unwrap();
+    write_file(ips.into_iter(), hosts_dst_filename).unwrap();
 }
 
 fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
