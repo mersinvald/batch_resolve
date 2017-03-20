@@ -4,9 +4,9 @@ version = "0.1.0"
 authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
 
 [dependencies]
-futures = "*"
-futures-cpupool = "*"
+futures = "0.1.11"
 trust-dns = "0.10"
-tokio-core = "*"
-log = "*"
-env_logger = "*"
+tokio-core = "0.1.6"
+log = "0.3.7"
+env_logger = "0.4.2"
+lazy_static = "0.2"

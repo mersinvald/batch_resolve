@@ -1,18 +1,20 @@
-#![feature(conservative_impl_trait)]
 #![feature(box_syntax)]
+#![feature(try_from)]
 
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+
+#[macro_use]
+extern crate lazy_static;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate trust_dns;
 extern crate tokio_core;
 
-mod error;
-mod resolver;
+mod resolve;
+use resolve::*;
 
-use std::borrow::Cow;
+use std::cell::RefCell;
 use std::iter::IntoIterator;
 use std::iter::Iterator;
 use std::collections::HashSet;
@@ -20,36 +22,10 @@ use std::path::Path;
 use std::io::{self, Read, Write};
 use std::fs::File;
 
-use tokio_core::reactor::{Core, Handle};
-
-use futures::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
 use std::rc::Rc;
-use futures::future::Future;
-use futures::Sink;
-use futures::Stream;
-use futures::future::{poll_fn, lazy};
-use futures::Async;
-use futures::stream;
-use std::iter;
 use std::env;
 use std::io::stdout;
 
-use log::LogLevel;
-
-use error::*;
-use resolver::*;
-
-fn resolve<F>(input: HashSet<String>, mut resolve_fn: F) 
-    -> Box<Stream<Item=Option<Vec<DnsData>>, Error=ResolverError>>
-    where F: FnMut(&str) -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>> + 'static,
-{
-    let stream = stream::iter::<_, _, ResolverError>(input.into_iter().map(|x| Ok(x)))
-                 .map(move |to_resolve| resolve_fn(&to_resolve))
-                 .buffer_unordered(100);
-    Box::new(stream)
-}
 
 fn main() {
     setup_logger();
@@ -59,89 +35,56 @@ fn main() {
     let hosts_src_filename   = env::args().nth(3).unwrap();
     let hosts_dst_filename   = env::args().nth(4).unwrap();
 
-    let dns_servers = vec![
-        "8.8.8.8:53".parse().unwrap(),        // Google primary
-        "8.8.4.4:53".parse().unwrap(),        // Google secondary
-       //"67.222.132.213:53".parse().unwrap()
-    ];
-
     // Synchronously load files
-    let (mut domains, mut ips) = (
+    let (mut domains, mut hosts) = (
         load_file(domains_src_filename).unwrap(),
         load_file(hosts_src_filename).unwrap()
     );
 
-    let overall_count = ips.len() + domains.len();
-    let mut done_count = 0;
-    let mut success_count = 0;
-    let mut failure_count = 0;
-
-    {
-        // Create Tokio Core
-        let mut lp = Core::new().unwrap();
-        let handle = lp.handle();
-
-        // Create progress mpscs
-        let (done_tx, done_rx) = mpsc::channel(1024);
-
-        // Create resolver with different DNS servers
-        let dom_resolver = TrustDNSResolver::new(dns_servers.clone(), handle.clone(), done_tx.clone());
-        let ip_resolver  = TrustDNSResolver::new(dns_servers.clone(), handle.clone(), done_tx);
+    let overall_count = hosts.len() + domains.len();
     
-        // Spawn resolvers and move loaded data there
-        let domains_future = resolve(ips.clone(), move |item| dom_resolver.reverse_resolve(item));
-        let ips_future = resolve(domains.clone(), move |item| ip_resolver.resolve(item));
+    // Vectors to store results
+    let resolved_domains = Rc::new(RefCell::new(Vec::new()));
+    let resolved_hosts = Rc::new(RefCell::new(Vec::new()));
 
+    // Create batch resolver and fill it with tasks
+    let mut batch = Batch::new();
+    batch.add_task(domains.clone(), resolved_hosts.clone(), QueryType::A);
+    batch.add_task(hosts.clone(), resolved_domains.clone(), QueryType::PTR);
 
-        let domains_collect_future = domains_future.filter(Option::is_some)
-                                           .map(Option::unwrap)
-                                           .for_each(|vec| 
-        {    
-            for mut result in vec.into_iter() {
-                result.take_name().map(|mut name| {
-                    if name.ends_with('.') {
-                        name.pop();
-                    }
-                    domains.insert(name);
-                });
-            }
-            Ok(())
-        });
+    // Create status callback
+    batch.register_status_callback(box move |status: Status| {
+        draw_status(status.done, overall_count as u64, 20);
+        print!(" | {}/{} done {}/{} succesed {}/{} failed\r", 
+            status.done, overall_count,
+            status.success, overall_count,
+            status.fail, overall_count
+        );
+        stdout().flush().unwrap();
+    });
 
-        let ips_collect_future = ips_future.filter(Option::is_some)
-                                           .map(Option::unwrap)
-                                           .for_each(|vec| 
-        {    
-            for mut result in vec.into_iter() {
-                result.take_ip().map(|ip|ips.insert(ip));
-            }
-            Ok(())
-        });
-        
-        
-        handle.spawn(done_rx.for_each(move |status| {
-            match status {
-                ResolveStatus::Success => success_count += 1,
-                ResolveStatus::Failure => failure_count += 1
-            }
-            done_count += 1;
-            draw_status(done_count, overall_count as u64, 20);
-            print!(" | {}/{} done {}/{} succesed {}/{} failed\r", 
-                done_count, overall_count,
-                success_count, overall_count,
-                failure_count, overall_count
-            );
-            stdout().flush().unwrap();
-            Ok(())
-        }));
+    // Execute batch job
+    batch.run();
 
-        let task = domains_collect_future.join(ips_collect_future);
-    
-        lp.run(task).unwrap();
+    // Extract data from Rc<RefCell<_>>
+    let resolved_domains = Rc::try_unwrap(resolved_domains).unwrap().into_inner();
+    let resolved_hosts   = Rc::try_unwrap(resolved_hosts).unwrap().into_inner();
+
+    // Merge back with the original entries
+    for mut domain in resolved_domains.into_iter() {
+        if domain.ends_with('.') {
+            domain.pop();
+        }
+        domains.insert(domain);
     }
 
-    write_file(domains.into_iter(), domains_dst_filename).unwrap();
-    write_file(ips.into_iter(), hosts_dst_filename).unwrap();
+    for host in resolved_hosts {
+        hosts.insert(host);
+    }
+
+    // Write files
+    write_file(domains, domains_dst_filename).unwrap();
+    write_file(hosts, hosts_dst_filename).unwrap();
 }
 
 fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {

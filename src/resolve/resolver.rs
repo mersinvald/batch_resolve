@@ -1,31 +1,19 @@
-use std::io;
-use std::net::{IpAddr, ToSocketAddrs};
 use std::str;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
-use std::result;
+use std::collections::HashSet;
+use std::net::SocketAddr;
+use std::convert::TryFrom;
+use std::borrow::Borrow;
 
-use futures::sync::oneshot;
-use futures::sync::mpsc;
 use futures::Future;
-use futures::BoxFuture;
-use futures::future::{err, ok};
-use futures_cpupool::CpuPool;
 use futures::Sink;
 use futures::future;
-use futures::stream;
-use futures::Stream;
-use futures::stream::once;
-use futures::IntoFuture;
 use futures::future::Loop;
+use futures::sync::mpsc;
+use tokio_core::reactor::Handle;
 
-use error::*;
-use std::clone::Clone;
-
-use std::net::SocketAddr;
 use trust_dns::client::{ClientFuture, BasicClientHandle, ClientHandle};
-use trust_dns::tcp::TcpClientStream;
 use trust_dns::udp::UdpClientStream;
 use trust_dns::error::ClientError;
 use trust_dns::rr::domain::Name;
@@ -33,8 +21,11 @@ use trust_dns::rr::record_type::RecordType;
 use trust_dns::rr::dns_class::DNSClass;
 use trust_dns::rr::resource::Record;
 use trust_dns::op::message::Message;
-use tokio_core::reactor::Handle;
 use trust_dns::error::ClientErrorKind;
+
+use super::error::*;
+use super::batch::ResolveStatus;
+use super::config::CONFIG;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
     let (stream, stream_handle) = UdpClientStream::new(
@@ -74,15 +65,17 @@ impl ClientFactory for FixedClientFactory {
 }
 
 struct LevellingClientFactory {
-    dns_server_addrs: Vec<SocketAddr>,
+    dns_server_addrs: Rc<Vec<SocketAddr>>,
     last_chosen: RefCell<usize>,
     loop_handle: Handle,
 }
 
 impl LevellingClientFactory {
-    pub fn new(dns_server_addrs: Vec<SocketAddr>, loop_handle: Handle) -> LevellingClientFactory {
+    pub fn new<I>(dns_server_addrs: I, loop_handle: Handle) -> LevellingClientFactory 
+        where I: Into<Rc<Vec<SocketAddr>>>
+    {
         LevellingClientFactory {
-            dns_server_addrs: dns_server_addrs,
+            dns_server_addrs: dns_server_addrs.into(),
             last_chosen: RefCell::from(0),
             loop_handle: loop_handle,
         }
@@ -108,7 +101,9 @@ pub struct TrustDNSResolver {
 }
 
 impl TrustDNSResolver {
-    pub fn new(dns_server_addrs: Vec<SocketAddr>, loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
+    pub fn new<I>(dns_server_addrs: I, loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self 
+        where I: Into<Rc<Vec<SocketAddr>>>
+    {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
             client_factory: Rc::new(LevellingClientFactory::new(
@@ -129,8 +124,8 @@ impl TrustDNSResolver {
             Name::parse(host, Some(&Name::root())).unwrap(), 
             DNSClass::IN, 
             RecordType::A, 
-        ).map(|x| opt_msg_to_vec_dnsdata(x))
-         .and_then(|x| Ok(report_status(x, done_tx)));
+        ).map(|msg| msg.as_ref().map(Message::extract_dnsdata))
+         .and_then(|x| Ok(x.report_status(done_tx)));
 
         Box::new(future)
     }
@@ -145,7 +140,7 @@ impl TrustDNSResolver {
             Name::with_labels(labels).label("in-addr").label("arpa"),
             DNSClass::IN, 
             RecordType::PTR,
-        ).and_then(|x| Ok(report_status(x, done_tx)));
+        ).and_then(|x| Ok(x.report_status(done_tx)));
 
         Box::new(future)
     }
@@ -153,32 +148,63 @@ impl TrustDNSResolver {
     fn recurse_ptr(&self, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>>
     {
+        struct State {
+            handle: Handle,
+            client_factory: Rc<ClientFactory>,
+            nameservers: Vec<NS>,
+            visited: HashSet<NS>,
+            answer: Vec<DnsData>
+        }
+
+        impl State {
+            pub fn pop_ns(&mut self) -> Option<NS> {
+                self.nameservers.pop().map(|ns| {
+                    self.visited.insert(ns.clone());
+                    ns    
+                })
+            }
+
+            pub fn push_nameservers<I, B>(&mut self, iter: I) 
+                where I: IntoIterator<Item=B>,
+                    B: Borrow<Name>
+            {
+                let new_nameservers = iter.into_iter()
+                    .map(NS::try_from)
+                    .filter_map(Result::ok)
+                    .filter(|ns| !self.visited.contains(ns))
+                    .collect::<Vec<_>>();
+                self.nameservers.extend(new_nameservers)
+            }
+
+            pub fn add_answer(&mut self, answer: Vec<DnsData>) {
+                self.answer.extend(answer)
+            }
+        }
+
         let state = State {
             handle: self.loop_handle.clone(),
             client_factory: self.client_factory.clone(),
-            ns: vec![NS::Known(self.client_factory.next_namesrv())],
-            result: vec![]
+            nameservers: vec![NS::Known(self.client_factory.next_namesrv())],
+            visited: HashSet::new(),
+            answer: vec![]
         };
 
         let resolve_loop = future::loop_fn(state, move |mut state| {
             Self::resolve_with_ns(
                 state.handle.clone(),
                 state.client_factory.clone(),
-                state.ns.pop().unwrap(),
+                state.pop_ns().unwrap(),
                 name.clone(), query_class, query_type
             ).map(move |message| {
                 trace!("Received DNS message: {:?}", message);
-                message.map(|mut msg| {
-                    state.ns.extend(msg.take_name_servers().iter()
-                            .filter(|ns| ns.name().num_labels() != 0)
-                            .map(|ns|   ns.name())
-                            .map(|name| NS::Unknown(name.to_string())));
-                    state.result.extend(msg_to_vec_dnsdata(msg));
+                message.map(|msg| {
+                    state.push_nameservers(msg.name_servers().iter().map(Record::name));
+                    state.add_answer(msg.extract_dnsdata());
                 });
                 state
             })
             .and_then(|state| {
-                if !state.result.is_empty() || state.ns.is_empty() {
+                if !state.answer.is_empty() || state.nameservers.is_empty() {
                     Ok(Loop::Break(state))
                 } else {
                     Ok(Loop::Continue(state))
@@ -186,10 +212,10 @@ impl TrustDNSResolver {
             })
         });
 
-        Box::new(resolve_loop.map(|state| if state.result.is_empty() {
+        Box::new(resolve_loop.map(|state| if state.answer.is_empty() {
             None
         } else {
-            Some(state.result)
+            Some(state.answer)
         }))
     }
 
@@ -198,19 +224,19 @@ impl TrustDNSResolver {
     {
         debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
         let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
-            NS::Known(addr) => box ok(Some(addr)),
+            NS::Known(addr) => box future::ok(Some(addr)),
             NS::Unknown(domain) => {
                 box Self::resolve_retry3(
                     client_factory.clone(),
                     Name::parse(&domain, Some(&Name::root())).unwrap(), 
                     DNSClass::IN, 
                     RecordType::A, 
-                ).map(|msg| opt_msg_to_vec_dnsdata(msg)
+                ).map(|msg| msg.as_ref().map(Message::extract_dnsdata)
                     .and_then(|dnsdata|     dnsdata.into_iter().nth(0))
                     .and_then(|mut dnsdata| dnsdata.take_ip())
-                    .map     (|mut ip| { ip.push_str(":53"); ip} )
-                    .and_then(|ip| ip.parse::<SocketAddr>().map_err(|e| {
-                        warn!("Invalid IP({:?}): {:?}", ip, e);
+                    .map     (|mut ip|    { ip.push_str(":53"); ip} )
+                    .and_then(|ip|          ip.parse::<SocketAddr>().map_err(|e| {
+                        error!("Invalid IP({:?}): {:?}", ip, e);
                         e
                     }).ok()) 
                 )
@@ -219,7 +245,7 @@ impl TrustDNSResolver {
 
         
         let future = ns_resolve.and_then(move |ns| match ns {
-            None => box ok(None),
+            None => box future::ok(None),
             Some(ns) => 
                 Self::resolve_retry3(
                     Rc::new(FixedClientFactory::new(loop_handle, ns)),
@@ -232,49 +258,77 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    // @TODO Do something with this mad-caffeine-overdose shit
     fn resolve_retry3(client_factory: Rc<ClientFactory>, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Option<Message>, Error=ResolverError>>
     {
-        let state = Rc::new(RefCell::new((3, None)));
-        let name_copy = name.clone();
-
-        let retry_loop = future::loop_fn(state, move |state| {
-            let success_state = state.clone();
-            Self::_resolve(client_factory.new_client(), name.clone(), query_class, query_type)
-                .and_then(move |message| { 
-                    (*success_state.borrow_mut()).1 = message; 
-                    Ok(Loop::Break(success_state)) 
-                })
-                .or_else(move |error| { 
-                    let next_step = |state: Rc<RefCell<(i32, Option<_>)>>| {
-                        (*state.borrow_mut()).0 -= 1;
-                        if (*state.borrow()).0 > 0 { Ok(Loop::Continue(state)) }
-                        else                       { Ok(Loop::Break(state))    } 
-                    };
-                    match *error.kind() {
-                        ClientErrorKind::Timeout => {
-                            next_step(state)
-                        },
-                        ClientErrorKind::Canceled(e) => {
-                            if (*state.borrow()).0 == 0 {error!("{}", e)}
-                            next_step(state)
-                        },
-                        _  => {
-                            let err = ResolverError::DnsClientError(error);
-                            error!("{}", err);
-                            Err(err)
-                        }
-                    }
-                    
-                })
-        }).map(move |state| {
-            let state = Rc::try_unwrap(state).unwrap().into_inner();
-            match state.1 {
-                Some(..) => (),
-                None     => warn!("Failed to resolve {:?}: Connection Timeout", name_copy.to_string()),
+        struct State(RefCell<u32>, RefCell<Option<Message>>);
+        impl State {
+            fn new() -> Self {
+                State(RefCell::new(CONFIG.get_timeout_retries()), RefCell::new(None))
             }
-            state.1
+
+            fn next_step(state: Rc<Self>) -> Result<Loop<Rc<Self>, Rc<Self>>, ResolverError> {
+                *state.0.borrow_mut() -= 1;
+                if *state.0.borrow() > 0 { 
+                    Ok(Loop::Continue(state)) 
+                } else { 
+                    Ok(Loop::Break(state))    
+                } 
+            }
+
+            fn has_next_step(state: &Rc<Self>) -> bool {
+                *state.0.borrow() > 0
+            }
+
+            fn set_message(state: &Rc<Self>, message: Option<Message>) {
+                *state.1.borrow_mut() = message
+            }
+
+            fn get_message(state: &Rc<Self>) -> Option<Message> {
+                state.1.borrow().clone()
+            }
+        }
+
+        let state = Rc::new(State::new());
+
+        let retry_loop = {
+            let name = name.clone();
+
+            future::loop_fn(state, move |state| {
+                let and_state = state.clone();
+                let or_state = state.clone();
+                Self::_resolve(client_factory.new_client(), name.clone(), query_class, query_type)
+                    .and_then(|message| { 
+                        State::set_message(&and_state, message); 
+                        Ok(Loop::Break(and_state)) 
+                    })
+                    .or_else(move |error| { 
+                        match *error.kind() {
+                            ClientErrorKind::Timeout => {
+                                State::next_step(or_state)
+                            },
+                            ClientErrorKind::Canceled(e) => {
+                                if !State::has_next_step(&or_state) {error!("{}", e)}
+                                State::next_step(or_state)
+                            },
+                            _  => {
+                                let err = ResolverError::DnsClientError(error);
+                                error!("{}", err);
+                                Err(err)
+                            }
+                        }
+                        
+                    })
+            })
+        };
+        
+        let retry_loop = retry_loop.map(move |state| {
+            let message = State::get_message(&state);
+            match message {
+                Some(..) => (),
+                None     => warn!("Failed to resolve {:?}: Connection Timeout", name.to_string()),
+            }
+            message
         });
 
         Box::new(retry_loop)
@@ -302,8 +356,11 @@ pub struct DnsData {
 
 use trust_dns::rr::RData::{A, AAAA, PTR};
 
-impl<'a> From<&'a Record> for DnsData {
-    fn from(record: &'a Record) -> DnsData {
+impl<B> From<B> for DnsData 
+    where B: Borrow<Record>
+{
+    fn from(record: B) -> DnsData {
+        let record = record.borrow();
         let name = if let &PTR(ref name) = record.rdata() {Some(name.to_string())} else {None};
         let ipv4 = if let &A(ip)         = record.rdata() {Some(ip.to_string())}   else  {None};
         let ipv6 = if let &AAAA(ip)      = record.rdata() {Some(ip.to_string())}   else  {None};
@@ -313,29 +370,6 @@ impl<'a> From<&'a Record> for DnsData {
             ipv6: ipv6
         }
     }
-}
-
-fn opt_msg_to_vec_dnsdata(mut msg: Option<Message>) -> Option<Vec<DnsData>> {
-    msg.take().map(|msg| {
-        msg_to_vec_dnsdata(msg)
-    })
-}
-
-fn msg_to_vec_dnsdata(msg: Message) -> Vec<DnsData> {
-    msg.answers().iter() 
-       .map(|record| {
-           DnsData::from(record)
-       })
-       .collect()
-}
-
-fn report_status<T>(data: Option<T>, done_tx: mpsc::Sender<ResolveStatus>) -> Option<T> {
-    if data.is_some() {
-        done_tx.send(ResolveStatus::Success).wait().unwrap();
-    } else {
-        done_tx.send(ResolveStatus::Failure).wait().unwrap();
-    }
-    data
 }
 
 impl DnsData {
@@ -348,7 +382,34 @@ impl DnsData {
     }
 }
 
-#[derive(Debug)]
+trait ExtractDnsData {
+    fn extract_dnsdata(&self) -> Vec<DnsData>;
+}
+
+impl ExtractDnsData for Message {
+    fn extract_dnsdata(&self) -> Vec<DnsData> {
+        self.answers().iter() 
+            .map(DnsData::from)
+            .collect()
+    }
+}
+
+trait ReportStatus {
+    fn report_status(self, done_tx: mpsc::Sender<ResolveStatus>) -> Self;    
+}
+
+impl<T> ReportStatus for Option<T> {
+    fn report_status(self, done_tx: mpsc::Sender<ResolveStatus>) -> Option<T> {
+        if self.is_some() {
+            done_tx.send(ResolveStatus::Success).wait().unwrap();
+        } else {
+            done_tx.send(ResolveStatus::Failure).wait().unwrap();
+        }
+        self
+    }    
+}
+
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 enum NS {
     Known(SocketAddr),
     Unknown(String)
@@ -363,16 +424,22 @@ impl NS {
     }
 }
 
-struct State {
-    handle: Handle,
-    client_factory: Rc<ClientFactory>,
-    ns: Vec<NS>,
-    result: Vec<DnsData>
+impl<B> TryFrom<B> for NS 
+    where B: Borrow<Name>
+{
+    type Err = ();
+    fn try_from(name: B) -> Result<NS, ()> {
+        let name = name.borrow(); 
+        if name.num_labels() != 0 {
+            Ok(NS::Unknown(name.to_string()))
+        } else {
+            Err(())
+        }
+    }
 }
 
-#[derive(Copy, Clone)]
-pub enum ResolveStatus {
-    Success,
-    Failure
+impl From<SocketAddr> for NS {
+    fn from(addr: SocketAddr) -> NS {
+        NS::Known(addr)
+    }
 }
-
