@@ -1,8 +1,10 @@
 use std::io;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::str;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
+use std::result;
 
 use futures::sync::oneshot;
 use futures::sync::mpsc;
@@ -16,6 +18,7 @@ use futures::stream;
 use futures::Stream;
 use futures::stream::once;
 use futures::IntoFuture;
+use futures::future::Loop;
 
 use error::*;
 use std::clone::Clone;
@@ -23,6 +26,7 @@ use std::clone::Clone;
 use std::net::SocketAddr;
 use trust_dns::client::{ClientFuture, BasicClientHandle, ClientHandle};
 use trust_dns::tcp::TcpClientStream;
+use trust_dns::udp::UdpClientStream;
 use trust_dns::error::ClientError;
 use trust_dns::rr::domain::Name;
 use trust_dns::rr::record_type::RecordType;
@@ -32,187 +36,248 @@ use trust_dns::op::message::Message;
 use tokio_core::reactor::Handle;
 use trust_dns::error::ClientErrorKind;
 
-pub struct TrustDNSResolver {
+fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
+    let (stream, stream_handle) = UdpClientStream::new(
+        name_server, loop_handle.clone()
+    );
+
+    ClientFuture::new(
+        stream,
+        stream_handle,
+        loop_handle,
+        None
+    )
+}
+
+trait ClientFactory {
+    fn new_client(&self) -> BasicClientHandle;
+}
+
+struct FixedClientFactory {
+    loop_handle: Handle,
+    name_server: SocketAddr,
+}
+
+impl FixedClientFactory {
+    pub fn new(loop_handle: Handle, name_server: SocketAddr) -> FixedClientFactory {
+        FixedClientFactory {
+            loop_handle: loop_handle,
+            name_server: name_server,
+        }
+    }
+}
+
+impl ClientFactory for FixedClientFactory {
+    fn new_client(&self) -> BasicClientHandle {
+        make_client(self.loop_handle.clone(), self.name_server)
+    }
+}
+
+struct LevellingClientFactory {
     dns_server_addrs: Vec<SocketAddr>,
     last_chosen: RefCell<usize>,
     loop_handle: Handle,
-    done_tx: mpsc::Sender<()>,
 }
 
-use std::time::Duration;
+impl LevellingClientFactory {
+    pub fn new(dns_server_addrs: Vec<SocketAddr>, loop_handle: Handle) -> LevellingClientFactory {
+        LevellingClientFactory {
+            dns_server_addrs: dns_server_addrs,
+            last_chosen: RefCell::from(0),
+            loop_handle: loop_handle,
+        }
+    }
+
+    pub fn next_namesrv(&self) -> SocketAddr {
+        let idx = (*self.last_chosen.borrow()) % self.dns_server_addrs.len();
+        (*self.last_chosen.borrow_mut()) += 1;
+        self.dns_server_addrs[idx]
+    }
+}
+
+impl ClientFactory for LevellingClientFactory {
+    fn new_client(&self) -> BasicClientHandle {
+        make_client(self.loop_handle.clone(), self.next_namesrv())
+    }
+}
+
+pub struct TrustDNSResolver {
+    loop_handle: Handle,
+    client_factory: Rc<LevellingClientFactory>,
+    done_tx: mpsc::Sender<ResolveStatus>,
+}
 
 impl TrustDNSResolver {
-    pub fn new(dns_server_addrs: Vec<SocketAddr>, loop_handle: Handle, done_tx: mpsc::Sender<()>) -> Self {
+    pub fn new(dns_server_addrs: Vec<SocketAddr>, loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
         TrustDNSResolver {
-            dns_server_addrs: dns_server_addrs,
-            last_chosen: RefCell::new(0),
-            loop_handle: loop_handle,
+            loop_handle: loop_handle.clone(),
+            client_factory: Rc::new(LevellingClientFactory::new(
+                dns_server_addrs,
+                loop_handle,
+            )),
             done_tx: done_tx
         }
     }
 }
 
 impl TrustDNSResolver {
-    fn next_namesrv(&self) -> SocketAddr {
-        let idx = (*self.last_chosen.borrow()) % self.dns_server_addrs.len();
-        (*self.last_chosen.borrow_mut()) += 1;
-        self.dns_server_addrs[idx]
-    }
-
-    fn client_with_namesrv(addr: SocketAddr, loop_handle: Handle) -> BasicClientHandle {
-        let (stream, stream_handle) = TcpClientStream::new(
-            addr, loop_handle.clone()
-        );
-
-        ClientFuture::new(
-            stream,
-            stream_handle,
-            loop_handle,
-            None
-        )
-    }
-
-    fn new_client(&self) -> BasicClientHandle {
-        Self::client_with_namesrv(self.next_namesrv(), self.loop_handle.clone())
-    }
-    
     pub fn resolve(&self, host: &str) -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>> {
         // @TODO concider adding AAAAA (ipv6) records
         let done_tx = self.done_tx.clone();
-        let client = self.new_client();
-
         let future = Self::resolve_retry3(
-            client,
+            self.client_factory.clone(),
             Name::parse(host, Some(&Name::root())).unwrap(), 
             DNSClass::IN, 
             RecordType::A, 
         ).map(|x| opt_msg_to_vec_dnsdata(x))
-         .map(|x| report_if_some(x, done_tx));
+         .and_then(|x| Ok(report_status(x, done_tx)));
 
         Box::new(future)
     }
 
-    pub fn reverse_resolve(&mut self, ip: &str) -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>> {
-        let labels = ip.split('.').map(str::to_owned).collect();
-        let done_tx = self.done_tx.clone();
-        let (tx, rx) = mpsc::channel(16);
+    pub fn reverse_resolve(&self, ip: &str) -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>> {
+        let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
+        labels.reverse();
 
-        Self::recurse_nameserver(
-            self.loop_handle.clone(),
-            self.new_client(),
-            NS::Known(self.next_namesrv()),
-            Name::with_labels(labels),
+        let done_tx = self.done_tx.clone();
+
+        let future = self.recurse_ptr(
+            Name::with_labels(labels).label("in-addr").label("arpa"),
             DNSClass::IN, 
             RecordType::PTR,
-            tx
-        );
-/*
-        let first_answer = rx.take(1).into_future().map(|(message, _)| {
-            message
-        });
+        ).and_then(|x| Ok(report_status(x, done_tx)));
 
-        let rx_future = first_answer.map(|msg| {
-            let dnsdata = opt_msg_to_vec_dnsdata(msg);
-            report_if_some(dnsdata, done_tx)
-        }).or_else(|_| {
-            Ok(None)   
-        });
-
-*/
-        let rx_future = rx.collect().map(|vec| {
-           println!("{:?}", vec); 
-           Some(vec![])
-        }).map_err(|_| ResolverError::FuturesSendError);
-
-        Box::new(rx_future)
+        Box::new(future)
     }
 
-    fn recurse_nameserver(loop_handle: Handle, resolve_client: BasicClientHandle, nameserver: NS, name: Name, query_class: DNSClass, query_type: RecordType, message_tx: mpsc::Sender<Message>) {
-        println!("Resolving {:?}. ns: {:?}", name, nameserver);
-        let recurse_resolve_client = resolve_client.clone();
-        let recurse_loop_handle = loop_handle.clone();
-        let recurse_down = |ns_addr: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>>| {
-            let future = ns_addr.and_then(move |ns| {
-                ns.map(|ns| {
-                    Self::resolve_retry3(
-                        Self::client_with_namesrv(ns, recurse_loop_handle.clone()),
-                        name.clone(),
-                        query_class, 
-                        query_type
-                    ).and_then(move |message| {
-                        if let Some(msg) = message {
-                            println!("{:?}", msg);
-                            if msg.answers().is_empty() {
-                                for nameserver in msg.name_servers().iter().map(|record| record.name().to_string()) {
-                                    Self::recurse_nameserver(
-                                        recurse_loop_handle.clone(),
-                                        recurse_resolve_client.clone(),
-                                        NS::Unknown(nameserver),
-                                        name.clone(), 
-                                        query_class, 
-                                        query_type, 
-                                        message_tx.clone()
-                                    );
-                                }
-                            } else {
-                                // Ignore result because multiple tasks can write to oneshot
-                                // while wee need only single result, so they can just fail to send
-                                message_tx.send(msg).wait().unwrap();
-                            }
-                        }
-                        Ok(())
-                    })
-                });
-                Ok(())
-            });
-
-            let future = future.map_err(|_| ());
-                
-            loop_handle.spawn(future);
+    fn recurse_ptr(&self, name: Name, query_class: DNSClass, query_type: RecordType) 
+        -> Box<Future<Item=Option<Vec<DnsData>>, Error=ResolverError>>
+    {
+        let state = State {
+            handle: self.loop_handle.clone(),
+            client_factory: self.client_factory.clone(),
+            ns: vec![NS::Known(self.client_factory.next_namesrv())],
+            result: vec![]
         };
 
-        match nameserver {
-            NS::Known(addr) => recurse_down(box ok(Some(addr))),
+        let resolve_loop = future::loop_fn(state, move |mut state| {
+            Self::resolve_with_ns(
+                state.handle.clone(),
+                state.client_factory.clone(),
+                state.ns.pop().unwrap(),
+                name.clone(), query_class, query_type
+            ).map(move |message| {
+                trace!("Received DNS message: {:?}", message);
+                message.map(|mut msg| {
+                    state.ns.extend(msg.take_name_servers().iter()
+                            .filter(|ns| ns.name().num_labels() != 0)
+                            .map(|ns|   ns.name())
+                            .map(|name| NS::Unknown(name.to_string())));
+                    state.result.extend(msg_to_vec_dnsdata(msg));
+                });
+                state
+            })
+            .and_then(|state| {
+                if !state.result.is_empty() || state.ns.is_empty() {
+                    Ok(Loop::Break(state))
+                } else {
+                    Ok(Loop::Continue(state))
+                }
+            })
+        });
+
+        Box::new(resolve_loop.map(|state| if state.result.is_empty() {
+            None
+        } else {
+            Some(state.result)
+        }))
+    }
+
+    fn resolve_with_ns(loop_handle: Handle, client_factory: Rc<ClientFactory>, nameserver: NS, name: Name, query_class: DNSClass, query_type: RecordType) 
+        -> Box<Future<Item=Option<Message>, Error=ResolverError>>
+    {
+        debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
+        let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
+            NS::Known(addr) => box ok(Some(addr)),
             NS::Unknown(domain) => {
-                let addr = Self::resolve_retry3(
-                    resolve_client,
+                box Self::resolve_retry3(
+                    client_factory.clone(),
                     Name::parse(&domain, Some(&Name::root())).unwrap(), 
                     DNSClass::IN, 
                     RecordType::A, 
                 ).map(|msg| opt_msg_to_vec_dnsdata(msg)
                     .and_then(|dnsdata|     dnsdata.into_iter().nth(0))
                     .and_then(|mut dnsdata| dnsdata.take_ip())
-                    .map(|ip| ip.parse::<SocketAddr>().unwrap()) 
-                );
-                recurse_down(box addr);
+                    .map     (|mut ip| { ip.push_str(":53"); ip} )
+                    .and_then(|ip| ip.parse::<SocketAddr>().map_err(|e| {
+                        warn!("Invalid IP({:?}): {:?}", ip, e);
+                        e
+                    }).ok()) 
+                )
             }
         };
+
+        
+        let future = ns_resolve.and_then(move |ns| match ns {
+            None => box ok(None),
+            Some(ns) => 
+                Self::resolve_retry3(
+                    Rc::new(FixedClientFactory::new(loop_handle, ns)),
+                    name.clone(),
+                    query_class, 
+                    query_type, 
+                )
+        });
+
+        Box::new(future)
     }
 
-    fn resolve_retry3(client: BasicClientHandle, name: Name, query_class: DNSClass, query_type: RecordType) 
+    // @TODO Do something with this mad-caffeine-overdose shit
+    fn resolve_retry3(client_factory: Rc<ClientFactory>, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Option<Message>, Error=ResolverError>>
     {
-        macro_rules! map_err {
-            ($future:expr) => (
-                $future.map_err(|e| {
-                    ResolverError::DnsClientError(e)
+        let state = Rc::new(RefCell::new((3, None)));
+        let name_copy = name.clone();
+
+        let retry_loop = future::loop_fn(state, move |state| {
+            let success_state = state.clone();
+            Self::_resolve(client_factory.new_client(), name.clone(), query_class, query_type)
+                .and_then(move |message| { 
+                    (*success_state.borrow_mut()).1 = message; 
+                    Ok(Loop::Break(success_state)) 
                 })
-            )
-        }
-    
-        Box::new( 
-                              Self::_resolve(client.clone(), name.clone(), query_class, query_type)
-            .or_else(move |_| Self::_resolve(client.clone(), name.clone(), query_class, query_type)
-            .or_else(move |_| Self::_resolve(client,         name,         query_class, query_type)
-            .or_else(move |error| match *error.kind() {
-                ClientErrorKind::Timeout      => Ok(None),
-                ClientErrorKind::Canceled(..) => Ok(None),
-                _ => Err(error)
-            })
-            .map_err(|e| {
-                ResolverError::DnsClientError(e)
-            })))
-        )
+                .or_else(move |error| { 
+                    let next_step = |state: Rc<RefCell<(i32, Option<_>)>>| {
+                        (*state.borrow_mut()).0 -= 1;
+                        if (*state.borrow()).0 > 0 { Ok(Loop::Continue(state)) }
+                        else                       { Ok(Loop::Break(state))    } 
+                    };
+                    match *error.kind() {
+                        ClientErrorKind::Timeout => {
+                            next_step(state)
+                        },
+                        ClientErrorKind::Canceled(e) => {
+                            if (*state.borrow()).0 == 0 {error!("{}", e)}
+                            next_step(state)
+                        },
+                        _  => {
+                            let err = ResolverError::DnsClientError(error);
+                            error!("{}", err);
+                            Err(err)
+                        }
+                    }
+                    
+                })
+        }).map(move |state| {
+            let state = Rc::try_unwrap(state).unwrap().into_inner();
+            match state.1 {
+                Some(..) => (),
+                None     => warn!("Failed to resolve {:?}: Connection Timeout", name_copy.to_string()),
+            }
+            state.1
+        });
+
+        Box::new(retry_loop)
     }
 
     fn _resolve(mut client: BasicClientHandle, name: Name, query_class: DNSClass, query_type: RecordType) 
@@ -235,13 +300,13 @@ pub struct DnsData {
     ipv6: Option<String>,
 }
 
-use trust_dns::rr::RData::{A, AAAA};
+use trust_dns::rr::RData::{A, AAAA, PTR};
 
 impl<'a> From<&'a Record> for DnsData {
     fn from(record: &'a Record) -> DnsData {
-        let name = Some(record.name().to_string());
-        let ipv4 = if let &A(ip)    = record.rdata() {Some(ip.to_string())} else {None};
-        let ipv6 = if let &AAAA(ip) = record.rdata() {Some(ip.to_string())} else {None};
+        let name = if let &PTR(ref name) = record.rdata() {Some(name.to_string())} else {None};
+        let ipv4 = if let &A(ip)         = record.rdata() {Some(ip.to_string())}   else  {None};
+        let ipv6 = if let &AAAA(ip)      = record.rdata() {Some(ip.to_string())}   else  {None};
         DnsData {
             name: name,
             ipv4: ipv4,
@@ -264,9 +329,11 @@ fn msg_to_vec_dnsdata(msg: Message) -> Vec<DnsData> {
        .collect()
 }
 
-fn report_if_some<T, E: Default>(data: Option<T>, done_tx: mpsc::Sender<E>) -> Option<T> {
+fn report_status<T>(data: Option<T>, done_tx: mpsc::Sender<ResolveStatus>) -> Option<T> {
     if data.is_some() {
-        done_tx.send(E::default()).wait().unwrap();
+        done_tx.send(ResolveStatus::Success).wait().unwrap();
+    } else {
+        done_tx.send(ResolveStatus::Failure).wait().unwrap();
     }
     data
 }
@@ -285,5 +352,27 @@ impl DnsData {
 enum NS {
     Known(SocketAddr),
     Unknown(String)
+}
+
+impl NS {
+    pub fn to_string(&self) -> String {
+        match *self {
+            NS::Known(ref addr) => addr.to_string(),
+            NS::Unknown(ref dom) => dom.clone()
+        }
+    }
+}
+
+struct State {
+    handle: Handle,
+    client_factory: Rc<ClientFactory>,
+    ns: Vec<NS>,
+    result: Vec<DnsData>
+}
+
+#[derive(Copy, Clone)]
+pub enum ResolveStatus {
+    Success,
+    Failure
 }
 
