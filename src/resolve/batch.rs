@@ -1,8 +1,6 @@
 // TODO check out patches in TrustDNS to store domains and ips as dictinct types.
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::iter::FromIterator;
-use std::net::SocketAddr;
 
 use tokio_core::reactor::Core;
 
@@ -20,13 +18,15 @@ use super::config::CONFIG;
 pub struct Status {
     pub done: u64,
     pub success: u64,
-    pub fail: u64
+    pub fail: u64,
+    pub errored: u64,
 }
 
 #[derive(Copy, Clone)]
 pub enum ResolveStatus {
     Success,
-    Failure
+    Failure,
+    Error
 }
 
 pub type OutVec = Rc<RefCell<Vec<String>>>;
@@ -47,7 +47,6 @@ impl<I> Batch<I>
 {
     pub fn new() -> Self {
         let event_loop = Core::new().unwrap();
-        let handle = event_loop.handle();
         let (done_tx, done_rx) = mpsc::channel(1024);
         Batch {
             event_loop: event_loop,
@@ -55,7 +54,7 @@ impl<I> Batch<I>
             outputs: vec![],
             done_tx: done_tx,
             done_rx: done_rx,
-            status_fn: box |_| (),
+            status_fn: Box::new(|_| ()),
         }
     }
 
@@ -73,14 +72,13 @@ impl<I> Batch<I>
     }
 
     pub fn run(mut self) {
-        let mut future: Box<Future<Item=(), Error=()>> = box future::empty();
         let tasks_cnt = self.tasks.len();
 
         let mut futures = vec![];
 
-        for i in 0..tasks_cnt {
+        for _ in 0..tasks_cnt {
             let task = self.tasks.pop().unwrap();
-            let mut out  = self.outputs.pop().unwrap();
+            let out  = self.outputs.pop().unwrap();
 
             futures.push(task.resolve().and_then(move |result| {
                 (*out.borrow_mut()).extend(result);
@@ -99,7 +97,8 @@ impl<I> Batch<I>
             status.done += 1;
             match resolve_status {
                 ResolveStatus::Success => status.success += 1,
-                ResolveStatus::Failure => status.fail += 1
+                ResolveStatus::Failure => status.fail += 1,
+                ResolveStatus::Error   => status.errored += 1,
             }
             status_fn(status);
             Ok(())

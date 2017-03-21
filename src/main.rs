@@ -1,6 +1,3 @@
-#![feature(box_syntax)]
-#![feature(try_from)]
-
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -53,15 +50,16 @@ fn main() {
     batch.add_task(hosts.clone(), resolved_domains.clone(), QueryType::PTR);
 
     // Create status callback
-    batch.register_status_callback(box move |status: Status| {
-        draw_status(status.done, overall_count as u64, 20);
-        print!(" | {}/{} done {}/{} succesed {}/{} failed\r", 
+    batch.register_status_callback(Box::new(move |status: Status| {
+        // draw_status(status.done, overall_count as u64, 20);
+        print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
             status.done, overall_count,
             status.success, overall_count,
-            status.fail, overall_count
+            status.fail, overall_count,
+            status.errored
         );
         stdout().flush().unwrap();
-    });
+    }));
 
     // Execute batch job
     batch.run();
@@ -112,10 +110,10 @@ fn setup_logger() {
 fn draw_status(done: u64, all: u64, len: usize) {
     let filled = (done as f64 / all as f64 * len as f64).ceil() as usize;
     print!("[");
-    for i in 0..filled {
+    for _ in 0..filled {
         print!("=");
     }
-    for i in filled..len {
+    for _ in filled..len {
         print!(" ");
     }
     print!("]");
