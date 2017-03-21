@@ -133,26 +133,21 @@ fn process_config(arg_path: Option<&str>) {
 }
 
 struct ResolveState {
-    // TODO: Rc here to avoid data cloning
-    pub input: HashSet<String>,
     pub result: Rc<RefCell<Vec<String>>>,
     pub out_path: String
 }
 
 impl ResolveState {
-    pub fn new(input: HashSet<String>, out_path: String) -> Self {
+    pub fn new(out_path: String) -> Self {
         ResolveState {
-            input: input,
             result: Rc::default(),
             out_path: out_path,
         }
     }
 
-    pub fn merge_unwrap(self) -> (HashSet<String>, String) {
-        let mut input = self.input;
+    pub fn unwrap(self) -> (Vec<String>, String) {
         let result = Rc::try_unwrap(self.result).unwrap().into_inner();
-        input.extend(result);
-        (input, self.out_path)
+        (result, self.out_path)
     }
 }
 
@@ -171,7 +166,7 @@ fn main() {
 
         overall_count += input_data.len();
 
-        let rresult = ResolveState::new(input_data.clone(), output);
+        let rresult = ResolveState::new(output);
         batch.add_task(input_data, rresult.result.clone(), qtype);
         resolve_states.push(rresult);
     }
@@ -199,18 +194,15 @@ fn main() {
     // Execute batch job
     batch.run();
 
-    // Merge back with original data 
-    // and merge all data with common output pather
+    // Merge all data with common output path
     let mut data_sinks = HashMap::new();
-  
     for resolved in resolve_states.into_iter() {
-        let (data, path) = resolved.merge_unwrap();
-
+        let (data, path) = resolved.unwrap();
         let entry = data_sinks.entry(path).or_insert(HashSet::new());
         (*entry).extend(data);
     }
 
-    // Write data to files
+    // Merge data into files
     for (path, data) in data_sinks.into_iter() {
         write_file(data, path).unwrap();
     }
@@ -223,14 +215,19 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
     Ok(buffer.lines().map(String::from).collect())
 }
 
+// TODO merge data by output and by query type
 fn write_file<'a, I: IntoIterator<Item=String>, P: AsRef<Path>>(data: I, path: P) -> io::Result<()> {
+    // Open file for writing
     let mut file = File::create(path)?;
+
+    // Sort and output data
     let mut data = data.into_iter().collect::<Vec<_>>();
     data.sort();
     for item in &data {
         file.write(item.as_bytes())?;
         file.write(b"\n")?;
     }
+
     Ok(())
 }
 
