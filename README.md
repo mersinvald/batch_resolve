@@ -1,1 +1,1 @@
-[![Build Status](https://travis-ci.org/mersinvald/rkn_dns_resolver.svg?branch=master)](https://travis-ci.org/mersinvald/rkn_dns_resolver)
+[![Build Status](https://travis-ci.org/mersinvald/batch_resolve.svg?branch=master)](https://travis-ci.org/mersinvald/batch_resolve)
