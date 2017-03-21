@@ -10,7 +10,7 @@ license = "MIT"
 license-file = "LICENSE"
 
 [badges]
-travis-ci = { repository = "mersinvald/batch_resolver" }
+travis-ci = { repository = "mersinvald/batch_resolve" }
 
 [[bin]]
 name = "batch_resolve"
