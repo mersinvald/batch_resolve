@@ -1,7 +1,10 @@
 [package]
-name = "batch_resolve"
+name = "batch_resolve_cli"
 version = "0.1.0"
 authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
+
+[[bin]]
+name = "batch_resolve"
 
 [dependencies]
 futures = "0.1.11"
