@@ -109,10 +109,12 @@ impl<I> Batch<I>
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum QueryType {
-    A,
-    PTR
+arg_enum!{
+    #[derive(Copy, Clone, Debug)]
+    pub enum QueryType {
+        A,
+        PTR
+    }
 }
 
 pub struct BatchTask<I> 
@@ -138,9 +140,6 @@ impl<I> BatchTask<I>
         let qtype = self.qtype;
 
         let stream = Self::resolve_stream(self.input, self.qtype, self.resolver);
-
-        // Filter out all Nones
-        let stream = stream.filter(Option::is_some).map(Option::unwrap);
         
         // Extract data
         let stream = stream.map(move |vec_dnsdata| {
@@ -163,7 +162,7 @@ impl<I> BatchTask<I>
         Box::new(future)
     }
 
-    fn resolve_stream(input: I, qtype: QueryType, resolver: TrustDNSResolver) -> Box<Stream<Item=Option<Vec<DnsData>>, Error=ResolverError>> 
+    fn resolve_stream(input: I, qtype: QueryType, resolver: TrustDNSResolver) -> Box<Stream<Item=Vec<DnsData>, Error=ResolverError>> 
         where I: IntoIterator<Item=String>
     {
         let stream = stream::iter::<_, _, ResolverError>(input.into_iter().map(|x| Ok(x)))

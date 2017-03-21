@@ -1,9 +1,7 @@
-#[macro_use]
-extern crate log;
+#[macro_use] extern crate log;
+#[macro_use] extern crate clap;
+#[macro_use] extern crate lazy_static;
 extern crate env_logger;
-
-#[macro_use]
-extern crate lazy_static;
 extern crate futures;
 extern crate trust_dns;
 extern crate tokio_core;
@@ -11,78 +9,211 @@ extern crate tokio_core;
 mod resolve;
 use resolve::*;
 
+use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
-use std::iter::IntoIterator;
-use std::iter::Iterator;
-use std::collections::HashSet;
 use std::path::Path;
 use std::io::{self, Read, Write};
 use std::fs::File;
+use std::sync::mpsc;
+use std::thread;
 
 use std::rc::Rc;
 use std::env;
 use std::io::stdout;
 
+use clap::{Arg, App};
+
+use log::{LogRecord, LogLevelFilter};
+use env_logger::LogBuilder;
+
+
+fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
+    let app = App::new("Batch Resolve")
+        .about("Fast asynchronous DNS batch resolver")
+        .version(crate_version!())
+        .author(crate_authors!())
+        .arg(Arg::with_name("inputs")
+            .help("Input file")
+            .short("i")
+            .long("in")
+            .value_name("INPUT")
+            .multiple(true)
+            .number_of_values(1))
+        .arg(Arg::with_name("outputs")
+            .help("Output file")
+            .short("o")
+            .long("out")
+            .value_name("OUTPUT")
+            .multiple(true)
+            .number_of_values(1))
+        .arg(Arg::with_name("queries")
+            .help("Query type")
+            .short("q")
+            .long("query")
+            .possible_values(&QueryType::variants())
+            .value_name("QUERY_TYPE")
+            .multiple(true)
+            .number_of_values(1))
+        .arg(Arg::with_name("config")
+            .help("Sets a custom config file")
+            .short("c")
+            .long("config")
+            .value_name("FILE")
+            .takes_value(true))
+        .arg(Arg::with_name("verbosity")
+            .help("Level of verbosity (-v -vv -vvv)")
+            .short("v")
+            .multiple(true)
+        );
+
+    let mut help_msg = Vec::new();
+    app.write_help(&mut help_msg).unwrap();
+    let help_msg = String::from_utf8(help_msg).unwrap();
+    
+    let matches = app.get_matches();
+
+    // Setup logging and with appropriate  verbosity level
+    match matches.occurrences_of("verbosity") {
+        0 => setup_logger(LogLevelFilter::Error),
+        1 => setup_logger(LogLevelFilter::Warn),
+        2 => setup_logger(LogLevelFilter::Info),
+        3 => setup_logger(LogLevelFilter::Debug),
+        4 | _ => setup_logger(LogLevelFilter::Trace),
+    }
+
+    // Get arguments
+    let inputs  = values_t!(matches.values_of("inputs"),  String).unwrap_or(vec![]);
+    let outputs = values_t!(matches.values_of("outputs"), String).unwrap_or(vec![]);
+    let qtypes  = values_t!(matches.values_of("queries"), QueryType).unwrap_or(vec![]);
+
+    // Cardinalities should be the same
+    if inputs.len() != outputs.len() || outputs.len() != qtypes.len() {
+        error!("input, output and query arguments number must be the same");
+        println!("{}", help_msg);
+        std::process::exit(1);
+    } 
+
+    // Process config 
+    process_config(matches.value_of("config"));
+
+    // Return inputs, outputs and query types
+    (inputs, outputs, qtypes)
+}
+
+fn process_config(arg_path: Option<&str>) {
+    let default_config_locations = vec![
+        "batch_resolve.conf",
+        "$HOME/.config/batch_resolve.conf",
+        "/etc/batch_resolve.conf",
+    ];
+
+    let config_file = if arg_path.is_some() {
+        // Custom config is the only option when it is passed
+        let arg_path = arg_path.unwrap();
+        debug!("Custom config path passed: {:?}", arg_path);
+        let file = File::open(arg_path).unwrap_or_else(|error| {
+            error!("failed to open custom config file {:?}: {}", arg_path, error);
+            std::process::exit(1);
+        });
+        Some(file)
+    } else {
+        let mut file = None;
+        for config_path in default_config_locations {
+            match File::open(config_path) {
+                Ok(f) => file = Some(f),
+                Err(err) => debug!("failed to open default config file {:?}: {}", config_path, err),
+            }
+        }
+        file
+    };
+
+    /*
+     * TODO: parse configs
+     */
+}
+
+struct ResolveState {
+    // TODO: Rc here to avoid data cloning
+    pub input: HashSet<String>,
+    pub result: Rc<RefCell<Vec<String>>>,
+    pub out_path: String
+}
+
+impl ResolveState {
+    pub fn new(input: HashSet<String>, out_path: String) -> Self {
+        ResolveState {
+            input: input,
+            result: Rc::default(),
+            out_path: out_path,
+        }
+    }
+
+    pub fn merge_unwrap(self) -> (HashSet<String>, String) {
+        let mut input = self.input;
+        let result = Rc::try_unwrap(self.result).unwrap().into_inner();
+        input.extend(result);
+        (input, self.out_path)
+    }
+}
 
 fn main() {
-    setup_logger();
+    let (inputs, outputs, qtypes) = process_args();
 
-    let domains_src_filename = env::args().nth(1).unwrap();
-    let domains_dst_filename = env::args().nth(2).unwrap();
-    let hosts_src_filename   = env::args().nth(3).unwrap();
-    let hosts_dst_filename   = env::args().nth(4).unwrap();
-
-    // Synchronously load files
-    let (mut domains, mut hosts) = (
-        load_file(domains_src_filename).unwrap(),
-        load_file(hosts_src_filename).unwrap()
-    );
-
-    let overall_count = hosts.len() + domains.len();
-    
-    // Vectors to store results
-    let resolved_domains = Rc::new(RefCell::new(Vec::new()));
-    let resolved_hosts = Rc::new(RefCell::new(Vec::new()));
-
-    // Create batch resolver and fill it with tasks
+    let mut overall_count = 0;
+    let mut resolve_states = vec![];
     let mut batch = Batch::new();
-    batch.add_task(domains.clone(), resolved_hosts.clone(), QueryType::A);
-    batch.add_task(hosts.clone(), resolved_domains.clone(), QueryType::PTR);
 
-    // Create status callback
+    for (&qtype, (input, output)) in qtypes.iter().zip(inputs.iter().zip(outputs.into_iter())) {
+        let input_data = load_file(input).unwrap_or_else(|err| {
+            error!("failed to open {:?}: {}", input, err);
+            std::process::exit(1);
+        });
+
+        overall_count += input_data.len();
+
+        let rresult = ResolveState::new(input_data.clone(), output);
+        batch.add_task(input_data, rresult.result.clone(), qtype);
+        resolve_states.push(rresult);
+    }
+        
+    // Create status output thread and register status callback
+    let (status_tx, status_rx) = mpsc::channel::<Status>();
+    
+    thread::spawn(move || {
+        for status in status_rx.iter() {
+            // draw_status(status.done, overall_count as u64, 20);
+            print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
+                status.done, overall_count,
+                status.success, overall_count,
+                status.fail, overall_count,
+                status.errored
+            );
+            stdout().flush().unwrap();
+        }
+    });
+
     batch.register_status_callback(Box::new(move |status: Status| {
-        // draw_status(status.done, overall_count as u64, 20);
-        print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
-            status.done, overall_count,
-            status.success, overall_count,
-            status.fail, overall_count,
-            status.errored
-        );
-        stdout().flush().unwrap();
+        status_tx.send(status).unwrap(); 
     }));
 
     // Execute batch job
     batch.run();
 
-    // Extract data from Rc<RefCell<_>>
-    let resolved_domains = Rc::try_unwrap(resolved_domains).unwrap().into_inner();
-    let resolved_hosts   = Rc::try_unwrap(resolved_hosts).unwrap().into_inner();
+    // Merge back with original data 
+    // and merge all data with common output pather
+    let mut data_sinks = HashMap::new();
+  
+    for resolved in resolve_states.into_iter() {
+        let (data, path) = resolved.merge_unwrap();
 
-    // Merge back with the original entries
-    for mut domain in resolved_domains.into_iter() {
-        if domain.ends_with('.') {
-            domain.pop();
-        }
-        domains.insert(domain);
+        let entry = data_sinks.entry(path).or_insert(HashSet::new());
+        (*entry).extend(data);
     }
 
-    for host in resolved_hosts {
-        hosts.insert(host);
+    // Write data to files
+    for (path, data) in data_sinks.into_iter() {
+        write_file(data, path).unwrap();
     }
-
-    // Write files
-    write_file(domains, domains_dst_filename).unwrap();
-    write_file(hosts, hosts_dst_filename).unwrap();
 }
 
 fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
@@ -103,8 +234,21 @@ fn write_file<'a, I: IntoIterator<Item=String>, P: AsRef<Path>>(data: I, path: P
     Ok(())
 }
 
-fn setup_logger() {
-    env_logger::init().unwrap();
+fn setup_logger(level: LogLevelFilter) {
+    let format = |record: &LogRecord| {
+        format!("{}: {}", record.level(), record.args())
+    };
+
+
+    let mut builder = LogBuilder::new();
+    builder.format(format)
+           .filter(Some("batch_resolve"), level);
+
+    if env::var("RUST_LOG").is_ok() {
+       builder.parse(&env::var("RUST_LOG").unwrap());
+    }
+
+    builder.init().unwrap();
 }
 
 fn draw_status(done: u64, all: u64, len: usize) {

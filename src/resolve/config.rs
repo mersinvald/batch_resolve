@@ -1,6 +1,4 @@
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::net::SocketAddr;
 
 lazy_static! {
@@ -8,7 +6,7 @@ lazy_static! {
         "8.8.8.8:53".parse().unwrap(),
         "8.8.4.4:53".parse().unwrap(),
     ]));
-    static ref DEFAULT_TIMEOUT_RETRIES: u32 = 3;
+    static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
     static ref DEFAULT_TASK_BUFFER_SIZE: usize = 100;
 
     pub static ref CONFIG: StaticWrapper<Config> = StaticWrapper(Config::default());
