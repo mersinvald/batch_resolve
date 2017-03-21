@@ -1,7 +1,16 @@
 [package]
 name = "batch_resolve_cli"
+description = "Fast asynchronous batch DNS resolver built on top of Tokio and TRust-DNS"
 version = "0.1.0"
 authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
+homepage = "http://github.com/mersinvald/batch_resolve"
+repository = "http://github.com/mersinvald/batch_resolve"
+readme = "README.md"
+license = "MIT"
+license-file = "LICENSE"
+
+[badges]
+travis-ci = { repository = "mersinvald/batch_resolver" }
 
 [[bin]]
 name = "batch_resolve"
