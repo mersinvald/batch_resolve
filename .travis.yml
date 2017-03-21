@@ -1,13 +1,10 @@
-language: rust
 sudo: required
 os:
 - linux
-- osx
-rust:
-- stable
 services:
 - docker
-before_deploy: "./build-release myapp ${TRAVIS_TAG}-${TRAVIS_OS_NAME}"
+script: 
+- "./build-release batch_resolve ${TRAVIS_TAG}-${TRAVIS_OS_NAME}"
 deploy:
   provider: releases
   api_key:
@@ -15,5 +12,4 @@ deploy:
   file: batch_resolve-${TRAVIS_TAG}-${TRAVIS_OS_NAME}.*
   on:
     repo: mersinvald/batch_resolve
-    rust: stable
     tags: true
