@@ -1,7 +1,19 @@
-sudo: false
-
 language: rust
-cache: cargo
-
+sudo: required
+os:
+- linux
+- osx
 rust:
-  - nightly
+- stable
+services:
+- docker
+before_deploy: "./build-release myapp ${TRAVIS_TAG}-${TRAVIS_OS_NAME}"
+deploy:
+  provider: releases
+  api_key:
+    secure: 5Sn6tlGY7CvCgTKyt+9gnrTQQpa/MO1juS4rjWHEWDxxyD1RYbiyp57mk7saTTJhBmn0sVSQmWos+Ol6l7YMGtjZZMkImGXmEecKCXpk5lrhgCVvF9ve1Z4zFPczENAQygZFkB++Ow58LkAMJFnCpOSW4yJO/nvqawfU2iPiu5HXTI7QOLqWKtMLZ0Vv1Ob57vvtLic2hTHRRu0vihlSv90rKk5zxlDEDZASlN1R5RlZ6XM2IwMPF3GoEkzxU3izsQqGfLIXbnwGu2/Qk5POJRzAIbixBub4CYIEZJ6h0lg2PkBDTjLDuLatnZvWDW6/LzltDe+PouuRh8Bitylk7NbF8TXmAcUYQfTlot7Es7unrD99+UetyyORjpGGmuzo4DCcP71fOnITqxH0FEfS2HeY4PkPz6cRtnYye3jje/qG+u6nQeqRHrB7U/wPFc2dPmcETAQzQt5VW3irDlNmypqxmA/xn9kXctk2EAezMQehXsdF12ATY5Eh6W5m6PbHMTL0RtK9f/ZCwFircZpWGoxk2jVhJ3MyePkJOf/y7sOdUnxHsTUVzQFCSyJfIE9TOEhZ/XxVv03ebooMhssE/95ORO2Df82ODYYrKLbi6xrgQ11Xz9EWVKTxuKbsTGto9uMZhRFFn1MMZdrep8bxYXcKC7o4N1RaNgCd8ZOyouk=
+  file: batch_resolve-${TRAVIS_TAG}-${TRAVIS_OS_NAME}.*
+  on:
+    repo: mersinvald/batch_resolve
+    rust: stable
+    tags: true

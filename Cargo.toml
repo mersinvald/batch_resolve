@@ -1,5 +1,5 @@
 [package]
-name = "rkn_resolver"
+name = "batch_resolve"
 version = "0.1.0"
 authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
 
@@ -10,3 +10,4 @@ tokio-core = "0.1.6"
 log = "0.3.7"
 env_logger = "0.4.2"
 lazy_static = "0.2"
+clap = "2.21.2"
