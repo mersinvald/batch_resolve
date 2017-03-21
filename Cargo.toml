@@ -7,7 +7,6 @@ homepage = "http://github.com/mersinvald/batch_resolve"
 repository = "http://github.com/mersinvald/batch_resolve"
 readme = "README.md"
 license = "MIT"
-license-file = "LICENSE"
 
 [badges]
 travis-ci = { repository = "mersinvald/batch_resolve" }
