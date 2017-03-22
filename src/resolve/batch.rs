@@ -10,9 +10,9 @@ use futures::stream;
 use futures::Future;
 use futures::future;
 
-use super::resolver::*;
-use super::error::ResolverError;
-use super::config::CONFIG;
+use resolve::resolver::*;
+use resolve::error::ResolverError;
+use config::CONFIG;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Status {
@@ -65,7 +65,7 @@ impl<I> Batch<I>
     pub fn add_task(&mut self, input: I, output: OutVec, qtype: QueryType) {
         self.tasks.push(BatchTask::new(
             input,
-            TrustDNSResolver::new(CONFIG.get_dns_servers(), self.event_loop.handle(), self.done_tx.clone()),
+            TrustDNSResolver::new(CONFIG.dns_servers(), self.event_loop.handle(), self.done_tx.clone()),
             qtype
         ));
         self.outputs.push(output)
@@ -170,7 +170,7 @@ impl<I> BatchTask<I>
                 QueryType::A   => resolver.resolve(&name),
                 QueryType::PTR => resolver.reverse_resolve(&name) 
             })
-            .buffer_unordered(CONFIG.get_task_buffer_size());
+            .buffer_unordered(CONFIG.task_buffer_size());
 
         Box::new(stream)
     }

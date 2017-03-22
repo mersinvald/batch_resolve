@@ -1,13 +1,20 @@
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate serde_derive;
+extern crate serde;
+extern crate toml;
+
 #[macro_use] extern crate log;
 #[macro_use] extern crate clap;
-#[macro_use] extern crate lazy_static;
 extern crate env_logger;
+
 extern crate futures;
 extern crate trust_dns;
 extern crate tokio_core;
 
 mod resolve;
+mod config;
 use resolve::*;
+use config::*;
 
 use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
@@ -102,14 +109,13 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
 
 fn process_config(arg_path: Option<&str>) {
     let default_config_locations = vec![
-        "batch_resolve.conf",
-        "$HOME/.config/batch_resolve.conf",
-        "/etc/batch_resolve.conf",
+        "batch_resolve.toml",
+        "$HOME/.config/batch_resolve.toml",
+        "/etc/batch_resolve.toml",
     ];
 
-    let config_file = if arg_path.is_some() {
+    let config_file = if let Some(arg_path) = arg_path {
         // Custom config is the only option when it is passed
-        let arg_path = arg_path.unwrap();
         debug!("Custom config path passed: {:?}", arg_path);
         let file = File::open(arg_path).unwrap_or_else(|error| {
             error!("failed to open custom config file {:?}: {}", arg_path, error);
@@ -120,16 +126,29 @@ fn process_config(arg_path: Option<&str>) {
         let mut file = None;
         for config_path in default_config_locations {
             match File::open(config_path) {
-                Ok(f) => file = Some(f),
                 Err(err) => debug!("failed to open default config file {:?}: {}", config_path, err),
+                Ok(f) => { 
+                    file = Some(f);
+                    break
+                },
+                
             }
         }
         file
     };
 
-    /*
-     * TODO: parse configs
-     */
+    if let Some(mut config_file) = config_file {
+        let mut config_str = String::new();
+        config_file.read_to_string(&mut config_str).unwrap();
+        CONFIG.parse(&config_str).unwrap_or_else(|e| {
+            error!("malformed configuration file: {}", e);
+            std::process::exit(1);
+        });
+    }
+
+    debug!("DNS Servers:        {:?}", *(CONFIG.dns_servers()));
+    debug!("Retries on timeout: {:?}", CONFIG.timeout_retries());
+    debug!("Working set size:   {:?}", CONFIG.task_buffer_size());
 }
 
 struct ResolveState {

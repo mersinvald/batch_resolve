@@ -1,0 +1,11 @@
+# DNS servers are only accepted as socket addresses
+# If port is not specified default DNS :53 port will be used
+dns = [
+    "8.8.8.8",
+    "8.8.4.4",
+    "77.88.8.8",
+    "77.88.8.1:53"
+]
+
+# Times to retry on connection timeout
+retry = 5

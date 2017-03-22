@@ -22,9 +22,9 @@ use trust_dns::rr::resource::Record;
 use trust_dns::op::message::Message;
 use trust_dns::error::ClientErrorKind;
 
-use super::error::*;
-use super::batch::ResolveStatus;
-use super::config::CONFIG;
+use resolve::error::*;
+use resolve::batch::ResolveStatus;
+use config::CONFIG;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
     let (stream, stream_handle) = UdpClientStream::new(
@@ -123,7 +123,7 @@ impl TrustDNSResolver {
 
         // @TODO concider adding AAAAA (ipv6) records
         let done_tx = self.done_tx.clone();
-        let future = Self::resolve_retry3(
+        let future = Self::resolve_retry(
             self.client_factory.clone(),
             Name::parse(&host, None).unwrap(), 
             DNSClass::IN, 
@@ -232,7 +232,7 @@ impl TrustDNSResolver {
         let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
             NS::Known(addr) => future::ok(Some(addr)).boxed(),
             NS::Unknown(domain) => {
-                Box::new(Self::resolve_retry3(
+                Box::new(Self::resolve_retry(
                     client_factory.clone(),
                     Name::parse(&domain, Some(&Name::root())).unwrap(), 
                     DNSClass::IN, 
@@ -254,7 +254,7 @@ impl TrustDNSResolver {
         
         let future = ns_resolve.then(move |result| {
             match result {
-                Ok(Some(nameserver)) => Self::resolve_retry3(
+                Ok(Some(nameserver)) => Self::resolve_retry(
                                         Rc::new(FixedClientFactory::new(loop_handle, nameserver)),
                                         name.clone(),
                                         query_class, 
@@ -268,13 +268,13 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn resolve_retry3(client_factory: Rc<ClientFactory>, name: Name, query_class: DNSClass, query_type: RecordType) 
+    fn resolve_retry(client_factory: Rc<ClientFactory>, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Message, Error=ResolverError>>
     {
         struct State(RefCell<u32>, RefCell<Option<Message>>);
         impl State {
             fn new() -> Self {
-                State(RefCell::new(CONFIG.get_timeout_retries()), RefCell::new(None))
+                State(RefCell::new(CONFIG.timeout_retries()), RefCell::new(None))
             }
 
             fn next_step(state: Rc<Self>) -> Result<Loop<Rc<Self>, Rc<Self>>, ResolverError> {
