@@ -16,7 +16,6 @@ name = "batch_resolve"
 
 [dependencies]
 futures = "0.1.11"
-trust-dns = "0.10"
 tokio-core = "0.1.6"
 log = "0.3.7"
 env_logger = "0.4.2"
@@ -25,3 +24,8 @@ clap = "2.21.2"
 serde = "0.9"
 serde_derive = "0.9"
 toml = "0.3"
+
+[dependencies.trust-dns]
+version = "0.10"
+default-features = false
+features = ["openssl"]

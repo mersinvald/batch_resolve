@@ -1,9 +1,12 @@
+language: rust
 sudo: required
 os:
 - linux
+rust:
+- stable
 services:
 - docker
-script: 
+before_deploy: 
 - "./build-release batch_resolve ${TRAVIS_TAG}-${TRAVIS_OS_NAME}"
 deploy:
   provider: releases
@@ -13,4 +16,5 @@ deploy:
   file: batch_resolve-${TRAVIS_TAG}-${TRAVIS_OS_NAME}.*
   on:
     repo: mersinvald/batch_resolve
+    rust: stable
     tags: true
