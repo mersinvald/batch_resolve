@@ -1,7 +1,8 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
+#[macro_use] extern crate derive_new;
 extern crate serde;
-extern crate toml;
+extern crate serde_yaml;
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate clap;
@@ -11,6 +12,8 @@ extern crate futures;
 extern crate trust_dns;
 extern crate tokio_core;
 
+#[macro_use]
+mod macros;
 mod resolve;
 mod config;
 use resolve::*;
@@ -23,6 +26,7 @@ use std::io::{self, Read, Write};
 use std::fs::File;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Instant, Duration};
 
 use std::rc::Rc;
 use std::env;
@@ -32,7 +36,6 @@ use clap::{Arg, App};
 
 use log::{LogRecord, LogLevelFilter};
 use env_logger::LogBuilder;
-
 
 fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
     let app = App::new("Batch Resolve")
@@ -194,15 +197,20 @@ fn main() {
     let (status_tx, status_rx) = mpsc::channel::<Status>();
     
     thread::spawn(move || {
+        // Print every 100ms
+        let mut instant = Instant::now();
         for status in status_rx.iter() {
-            // draw_status(status.done, overall_count as u64, 20);
-            print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
-                status.done, overall_count,
-                status.success, overall_count,
-                status.fail, overall_count,
-                status.errored
-            );
-            stdout().flush().unwrap();
+            if instant.elapsed() > Duration::from_millis(100) {
+                instant = Instant::now();
+                // draw_status(status.done, overall_count as u64, 20);
+                print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
+                    status.done, overall_count,
+                    status.success, overall_count,
+                    status.fail, overall_count,
+                    status.errored
+                );
+                stdout().flush().unwrap();
+            }
         }
     });
 
@@ -252,7 +260,7 @@ fn write_file<'a, I: IntoIterator<Item=String>, P: AsRef<Path>>(data: I, path: P
 
 fn setup_logger(level: LogLevelFilter) {
     let format = |record: &LogRecord| {
-        format!("{}: {}", record.level(), record.args())
+        format!("{}: {}\t\t\t", record.level(), record.args())
     };
 
 
@@ -265,16 +273,4 @@ fn setup_logger(level: LogLevelFilter) {
     }
 
     builder.init().unwrap();
-}
-
-fn draw_status(done: u64, all: u64, len: usize) {
-    let filled = (done as f64 / all as f64 * len as f64).ceil() as usize;
-    print!("[");
-    for _ in 0..filled {
-        print!("=");
-    }
-    for _ in filled..len {
-        print!(" ");
-    }
-    print!("]");
 }
