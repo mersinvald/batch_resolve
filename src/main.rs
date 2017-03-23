@@ -1,8 +1,7 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
-#[macro_use] extern crate derive_new;
 extern crate serde;
-extern crate serde_yaml;
+extern crate toml;
 
 #[macro_use] extern crate log;
 #[macro_use] extern crate clap;

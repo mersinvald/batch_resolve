@@ -19,15 +19,6 @@ lazy_static! {
     pub static ref CONFIG: StaticWrapper<Config> = StaticWrapper(Config::new());
 }
 
-macro_rules! uncell {
-    ($expr:expr) => (*$expr.borrow())
-}
-
-macro_rules! uncell_mut {
-    ($expr:expr) => (*$expr.borrow_mut())
-}
-
-
 #[derive(Clone, Debug)]
 pub struct Config {
     dns_servers: RefCell<Rc<Vec<SocketAddr>>>,
@@ -79,6 +70,10 @@ impl Config {
         if let Some(retry) = cfg_fmt.retry {
             uncell_mut!(self.timeout_retries) = retry;
         }
+
+        if let Some(par_tasks) = cfg_fmt.parallel_tasks {
+            uncell_mut!(self.task_buffer_size) = par_tasks;
+        }
     
         Ok(())
     }
@@ -88,6 +83,7 @@ impl Config {
 struct ConfigFormat {
     dns: Option<Vec<String>>,
     retry: Option<u32>,
+    parallel_tasks: Option<usize>,
 }
 
 #[derive(Debug)]

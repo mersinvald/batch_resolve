@@ -9,3 +9,6 @@ dns = [
 
 # Times to retry on connection timeout
 retry = 5
+
+# Number of async tasks in execution buffer
+parallel_tasks = 1000
