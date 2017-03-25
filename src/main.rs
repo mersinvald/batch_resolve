@@ -96,8 +96,8 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
     let qtypes  = values_t!(matches.values_of("queries"), QueryType).unwrap_or(vec![]);
 
     // Cardinalities should be the same
-    if inputs.len() != outputs.len() || outputs.len() != qtypes.len() {
-        error!("input, output and query arguments number must be the same");
+    if inputs.len() != outputs.len() || outputs.len() != qtypes.len() || inputs.is_empty() {
+        error!("input, output and query arguments number must be the same and non-zero");
         println!("{}", help_msg);
         std::process::exit(1);
     } 

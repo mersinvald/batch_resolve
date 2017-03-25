@@ -113,8 +113,22 @@ arg_enum!{
     #[derive(Copy, Clone, Debug)]
     pub enum QueryType {
         A,
-        PTR
+        AAAA,
+        PTR,
+        NS
     }
+}
+
+use trust_dns::rr::RecordType;
+impl Into<RecordType> for QueryType {
+    fn into(self) -> RecordType {
+        match self {
+            QueryType::A    => RecordType::A,
+            QueryType::AAAA => RecordType::AAAA,
+            QueryType::PTR  => RecordType::PTR,
+            QueryType::NS   => RecordType::NS
+        }
+    } 
 }
 
 pub struct BatchTask<I> 
@@ -137,39 +151,22 @@ impl<I> BatchTask<I>
     }
 
     fn resolve(self) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
-        let qtype = self.qtype;
-
         let stream = Self::resolve_stream(self.input, self.qtype, self.resolver);
-        
-        // Extract data
-        let stream = stream.map(move |vec_dnsdata| {
-            vec_dnsdata.into_iter().map(|mut result| {
-                match qtype {
-                    QueryType::A   => result.take_ip(),
-                    QueryType::PTR => result.take_name(),
-                }
-            }).collect::<Vec<Option<String>>>()
-        });
 
         // Flatten results
         let future = stream.collect()
             .map(|x| x.into_iter()
-                      .flat_map(|x| x.into_iter()
-                                     .filter(Option::is_some)
-                                     .map(Option::unwrap))
+                      .flat_map(|x| x.into_iter())
                       .collect());
 
         Box::new(future)
     }
 
-    fn resolve_stream(input: I, qtype: QueryType, resolver: TrustDNSResolver) -> Box<Stream<Item=Vec<DnsData>, Error=ResolverError>> 
+    fn resolve_stream(input: I, qtype: QueryType, resolver: TrustDNSResolver) -> Box<Stream<Item=Vec<String>, Error=ResolverError>> 
         where I: IntoIterator<Item=String>
     {
         let stream = stream::iter::<_, _, ResolverError>(input.into_iter().map(|x| Ok(x)))
-            .map(move |name| match qtype {
-                QueryType::A   => resolver.resolve(&name),
-                QueryType::PTR => resolver.reverse_resolve(&name) 
-            })
+            .map(move |name| resolver.resolve(&name, qtype))
             .buffer_unordered(CONFIG.task_buffer_size());
 
         Box::new(stream)

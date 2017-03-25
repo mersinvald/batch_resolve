@@ -5,6 +5,7 @@ use std::error::Error;
 pub enum ResolverError {
     ConnectionTimeout,
     NameServerNotResolved,
+    NotFound,
     DnsClientError(::trust_dns::error::ClientError),
 }
 
@@ -21,6 +22,7 @@ impl Error for ResolverError {
         match *self {
             ResolverError::ConnectionTimeout       => "Connection timeout",
             ResolverError::NameServerNotResolved   => "Failed to resolve nameserver", 
+            ResolverError::NotFound                => "Not found",
             ResolverError::DnsClientError(ref err) => err.description(),
         }
     }

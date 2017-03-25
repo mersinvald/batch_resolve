@@ -23,7 +23,7 @@ use trust_dns::op::message::Message;
 use trust_dns::error::ClientErrorKind;
 
 use resolve::error::*;
-use resolve::batch::ResolveStatus;
+use resolve::batch::{ResolveStatus, QueryType};
 use config::CONFIG;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
@@ -115,54 +115,55 @@ impl TrustDNSResolver {
 }
 
 impl TrustDNSResolver {
-    pub fn resolve(&self, host: &str) -> Box<Future<Item=Vec<DnsData>, Error=ResolverError>> {
-        let mut host = host.to_owned();
-        if !host.ends_with('.') {
-            host.push('.');
-        }
-
-        // @TODO concider adding AAAAA (ipv6) records
+    pub fn resolve(&self, name: &str, query_type: QueryType) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
         let done_tx = self.done_tx.clone();
-        let future = Self::resolve_retry(
-            self.client_factory.clone(),
-            Name::parse(&host, None).unwrap(), 
-            DNSClass::IN, 
-            RecordType::A, 
-        ).map(|msg| msg.extract_dnsdata())
-         .then(move |rv| rv.report_status(&host, done_tx))
-         .then(move |rv| rv.partial_ok());
+        
+        let future = match query_type {
+            QueryType::PTR => self.reverse_resolve(name),
+            _              => self.simple_resolve(name, query_type.into()),
+        };
+
+        let name = name.to_owned();
+        let future = future.map(move |msg| msg.extract_answer(query_type))
+            .then(move |rv| rv.report_status(&name, done_tx))
+            .then(move |rv| rv.partial_ok());
 
         Box::new(future)
     }
 
-    pub fn reverse_resolve(&self, ip: &str) -> Box<Future<Item=Vec<DnsData>, Error=ResolverError>> {
+    fn simple_resolve(&self, name: &str, rtype: RecordType) -> Box<Future<Item=Message, Error=ResolverError>> {
+        Box::new(
+            Self::resolve_retry(
+                self.client_factory.clone(),
+                Name::parse(&name, Some(&Name::root())).unwrap(), 
+                DNSClass::IN, 
+                rtype, 
+        ))
+    }
+
+    fn reverse_resolve(&self, ip: &str) -> Box<Future<Item=Message, Error=ResolverError>> {
         let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
         labels.reverse();
 
         let name = Name::with_labels(labels).label("in-addr").label("arpa");
-        let name_str = name.to_string();
-
-        let done_tx = self.done_tx.clone();
-
-        let future = self.recurse_ptr(
-            name,
-            DNSClass::IN, 
-            RecordType::PTR,
-        ).then(move |rv| rv.report_status(&name_str, done_tx))
-         .then(move |rv| rv.partial_ok());
-
-        Box::new(future)
+    
+        Box::new(
+            self.recurse_ptr(
+                name,
+                DNSClass::IN, 
+                RecordType::PTR,
+        ))
     }
 
     fn recurse_ptr(&self, name: Name, query_class: DNSClass, query_type: RecordType) 
-        -> Box<Future<Item=Vec<DnsData>, Error=ResolverError>>
+        -> Box<Future<Item=Message, Error=ResolverError>>
     {
         struct State {
             handle: Handle,
             client_factory: Rc<ClientFactory>,
             nameservers: Vec<NS>,
             visited: HashSet<NS>,
-            answer: Vec<DnsData>
+            answer: Option<Message>
         }
 
         impl State {
@@ -185,8 +186,8 @@ impl TrustDNSResolver {
                 self.nameservers.extend(new_nameservers)
             }
 
-            pub fn add_answer(&mut self, answer: Vec<DnsData>) {
-                self.answer.extend(answer)
+            pub fn add_answer(&mut self, answer: Message) {
+                self.answer = Some(answer)
             }
         }
 
@@ -195,7 +196,7 @@ impl TrustDNSResolver {
             client_factory: self.client_factory.clone(),
             nameservers: vec![NS::Known(self.client_factory.next_namesrv())],
             visited: HashSet::new(),
-            answer: vec![]
+            answer: None,
         };
 
         let resolve_loop = future::loop_fn(state, move |mut state| {
@@ -206,11 +207,11 @@ impl TrustDNSResolver {
                 name.clone(), query_class, query_type
             ).map(move |message| {
                 state.push_nameservers(message.name_servers().iter().map(Record::name));
-                state.add_answer(message.extract_dnsdata());
+                state.add_answer(message);
                 state
             })
             .and_then(|state| {
-                if !state.answer.is_empty() || state.nameservers.is_empty() {
+                if !state.answer.is_none() || state.nameservers.is_empty() {
                     Ok(Loop::Break(state))
                 } else {
                     Ok(Loop::Continue(state))
@@ -218,10 +219,12 @@ impl TrustDNSResolver {
             })
         });
 
-        Box::new(resolve_loop.map(|state| if state.answer.is_empty() {
-            vec![]
-        } else {
-            state.answer
+        Box::new(resolve_loop.and_then(|state| {
+            if let Some(answer) = state.answer {
+                Ok(answer)
+            } else {
+                Err(ResolverError::NotFound)
+            }
         }))
     }
 
@@ -237,17 +240,16 @@ impl TrustDNSResolver {
                     Name::parse(&domain, Some(&Name::root())).unwrap(), 
                     DNSClass::IN, 
                     RecordType::A,
-                ).map(|msg| msg.extract_dnsdata()
+                ).map(|msg| msg.extract_answer(QueryType::A)
                     .into_iter().nth(0)
-                    .and_then(|mut ddata| ddata.take_ip()
-                        .map(|mut ip| { ip.push_str(":53"); ip} )
+                    .map(|mut ip| { ip.push_str(":53"); ip } )
                         .and_then(|ip| ip.parse::<SocketAddr>()
                             .map_err(|e| {
                                 error!("Invalid IP({:?}): {:?}", ip, e);
                                 e
                             })
                             .ok()
-                ))))
+                )))
             }
         };
 
@@ -358,49 +360,51 @@ impl TrustDNSResolver {
     }
 }
 
-#[derive(Debug)]
-pub struct DnsData {
-    name: Option<String>,
-    ipv4: Option<String>,
-    ipv6: Option<String>,
+use trust_dns::rr::RData;
+
+trait FromRecord<B>
+    where B: Borrow<Record>,
+          Self: Sized
+{
+    fn from(r: B, qtype: QueryType) -> Option<Self>;
 }
 
-use trust_dns::rr::RData::{A, AAAA, PTR};
-
-impl<B> From<B> for DnsData 
+impl<B> FromRecord<B> for String 
     where B: Borrow<Record>
 {
-    fn from(record: B) -> DnsData {
-        let record = record.borrow();
-        let name = if let &PTR(ref name) = record.rdata() {Some(name.to_string())} else {None};
-        let ipv4 = if let &A(ip)         = record.rdata() {Some(ip.to_string())}   else  {None};
-        let ipv6 = if let &AAAA(ip)      = record.rdata() {Some(ip.to_string())}   else  {None};
-        DnsData {
-            name: name,
-            ipv4: ipv4,
-            ipv6: ipv6
+    fn from(r: B, qtype: QueryType) -> Option<Self> {
+        let r = r.borrow();
+
+        macro_rules! variants_to_string {
+            ($($x:tt),*) => {
+                match (qtype, r.rdata()) {
+                    $(
+                        (QueryType::$x, &RData::$x(ref data)) => Some(data.to_string()),
+                    )*
+                    _ => None
+                }
+            }
         }
+    
+        variants_to_string!(
+            A, 
+            AAAA,
+            NS,
+            PTR
+        )  
     }
 }
 
-impl DnsData {
-    pub fn take_name(&mut self) -> Option<String> {
-        self.name.take()
-    }
-
-    pub fn take_ip(&mut self) -> Option<String> {
-        self.ipv4.take().or(self.ipv6.take())
-    }
+trait ExtractAnswer {
+    fn extract_answer(&self, qtype: QueryType) -> Vec<String>;
 }
 
-trait ExtractDnsData {
-    fn extract_dnsdata(&self) -> Vec<DnsData>;
-}
-
-impl ExtractDnsData for Message {
-    fn extract_dnsdata(&self) -> Vec<DnsData> {
-        self.answers().iter() 
-            .map(DnsData::from)
+impl ExtractAnswer for Message {
+    fn extract_answer(&self, qtype: QueryType) -> Vec<String> {
+        self.answers().into_iter() 
+            .map(|record| <String as FromRecord<_>>::from(record, qtype))
+            .filter(Option::is_some)
+            .map(Option::unwrap)
             .collect()
     }
 }
@@ -443,8 +447,10 @@ impl<T> PartialOk<T> for Result<Vec<T>, ResolverError> {
     fn partial_ok(self) -> Result<Vec<T>, ResolverError> {
         match self {
             Err(ResolverError::ConnectionTimeout) |
-            Err(ResolverError::NameServerNotResolved) => Ok(vec![]),
-            Ok(vec) => Ok(vec),
+            Err(ResolverError::NameServerNotResolved) |
+            Err(ResolverError::NotFound) 
+                     => Ok(vec![]),
+            Ok(vec)  => Ok(vec),
             Err(err) => Err(err)
         }
     }
