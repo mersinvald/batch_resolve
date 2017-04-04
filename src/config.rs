@@ -1,37 +1,36 @@
 use std::fmt;
 use std::rc::Rc;
-use std::net::SocketAddr;
 use std::net::AddrParseError;
 use std::error::Error;
 use std::cell::RefCell;
 use toml;
 
+use resolve::dns::*;
+use resolve::dns;
+
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
 lazy_static! {
-    static ref DEFAULT_DNS_SERVERS: StaticWrapper<Rc<Vec<SocketAddr>>> = StaticWrapper(Rc::new(vec![
-        "8.8.8.8:53".parse().unwrap(),
-        "8.8.4.4:53".parse().unwrap(),
-    ]));
+    static ref DEFAULT_DNS_SERVERS: StaticWrapper<Vec<Dns>> = StaticWrapper(vec![
+        Dns::new("8.8.8.8:53".parse().unwrap(), 500),
+        Dns::new("8.8.4.4:53".parse().unwrap(), 500),
+    ]);
     static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
-    static ref DEFAULT_TASK_BUFFER_SIZE: usize = 100;
 
     pub static ref CONFIG: StaticWrapper<Config> = StaticWrapper(Config::new());
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Config {
-    dns_servers: RefCell<Rc<Vec<SocketAddr>>>,
+    dns_store: RefCell<Rc<DnsStore>>,
     timeout_retries: RefCell<u32>,
-    task_buffer_size: RefCell<usize>
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            dns_servers: RefCell::new(DEFAULT_DNS_SERVERS.clone()),
+            dns_store: RefCell::new(Rc::new(DnsStore::new(DEFAULT_DNS_SERVERS.clone()))),
             timeout_retries: RefCell::new(*DEFAULT_TIMEOUT_RETRIES),
-            task_buffer_size: RefCell::new(*DEFAULT_TASK_BUFFER_SIZE),
         }
     }
 }
@@ -41,49 +40,55 @@ impl Config {
         Self::default()
     }
 
-    pub fn dns_servers(&self) -> Rc<Vec<SocketAddr>> {
-        uncell!(self.dns_servers).clone()
+    pub fn dns_store(&self) -> Rc<DnsStore> {
+        uncell!(self.dns_store).clone()
     }
 
     pub fn timeout_retries(&self) -> u32 {
         uncell!(self.timeout_retries)
     }
 
-    pub fn task_buffer_size(&self) -> usize {
-        uncell!(self.task_buffer_size)
-    }
-
     pub fn parse(&self, string: &str) -> ConfigResult<()> {
-        let mut cfg_fmt: ConfigFormat = toml::from_str(string)?;
+        #[derive(Serialize, Deserialize, Debug)]
+        struct Dns {
+            addr: String,
+            qps:  Option<u32>
+        }
 
-        if let Some(mut dns) = cfg_fmt.dns.take() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct Config {
+            dns: Option<Vec<Dns>>,
+            retry: Option<u32>,
+            task_buffer_size: Option<usize>,
+        }
+
+        let mut cfg_fmt: Config = toml::from_str(string)?;
+
+        if let Some(mut dns_fmt_vec) = cfg_fmt.dns.take() {
             let mut dns_servers = Vec::new();
-            
-            for addr in &mut dns {
-                if !addr.contains(":") { addr.push_str(":53") }
-                dns_servers.push(addr.parse()?);
+
+            for dns in &mut dns_fmt_vec {
+                if !dns.addr.contains(":") {
+                    dns.addr.push_str(":53")
+                }
+                dns_servers.push(
+                    dns::Dns::new(dns.addr.parse()?, 
+                             dns.qps.unwrap_or(300)
+                    )
+                );
             }
 
-            uncell_mut!(self.dns_servers) = Rc::new(dns_servers);
+            debug!("{:?}", dns_servers);
+
+            uncell_mut!(self.dns_store) = Rc::new(dns::DnsStore::new(dns_servers));
         }
 
         if let Some(retry) = cfg_fmt.retry {
             uncell_mut!(self.timeout_retries) = retry;
         }
 
-        if let Some(par_tasks) = cfg_fmt.parallel_tasks {
-            uncell_mut!(self.task_buffer_size) = par_tasks;
-        }
-    
         Ok(())
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct ConfigFormat {
-    dns: Option<Vec<String>>,
-    retry: Option<u32>,
-    parallel_tasks: Option<usize>,
 }
 
 #[derive(Debug)]

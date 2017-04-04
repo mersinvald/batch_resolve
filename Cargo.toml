@@ -24,6 +24,7 @@ clap = "2.21.2"
 serde = "0.9"
 serde_derive = "0.9"
 toml = "0.3"
+derive-new = "0.4"
 
 [dependencies.trust-dns]
 version = "0.10"

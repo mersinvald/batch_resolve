@@ -1,5 +1,6 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
+#[macro_use] extern crate derive_new;
 extern crate serde;
 extern crate toml;
 
@@ -148,9 +149,8 @@ fn process_config(arg_path: Option<&str>) {
         });
     }
 
-    debug!("DNS Servers:        {:?}", *(CONFIG.dns_servers()));
     debug!("Retries on timeout: {:?}", CONFIG.timeout_retries());
-    debug!("Working set size:   {:?}", CONFIG.task_buffer_size());
+    debug!("DNS Servers:        {:?}", CONFIG.dns_store().get_hosts());
 }
 
 struct ResolveState {
@@ -200,15 +200,23 @@ fn main() {
         let mut instant = Instant::now();
         for status in status_rx.iter() {
             if instant.elapsed() > Duration::from_millis(100) {
-                instant = Instant::now();
-                // draw_status(status.done, overall_count as u64, 20);
-                print!("{}/{} done, {}/{} succesed, {}/{} failed, {} errored\r", 
-                    status.done, overall_count,
-                    status.success, overall_count,
-                    status.fail, overall_count,
-                    status.errored
+                let running = format!("{:6} running", status.running);
+                let done    = format!("{:6}/{} done", status.done, overall_count);
+                let success = format!("{:6}/{} succeded", status.success, overall_count);
+                let fail    = format!("{:6}/{} failed", status.fail, overall_count);
+                let error   = format!("{:6} errored", status.errored);
+
+                print!("{} {} {} {} {}\r", 
+                    running,
+                    done,
+                    success,
+                    fail,
+                    error
                 );
+
                 stdout().flush().unwrap();
+
+                instant = Instant::now();
             }
         }
     });

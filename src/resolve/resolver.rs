@@ -39,88 +39,53 @@ fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandl
     )
 }
 
-trait ClientFactory {
-    fn new_client(&self) -> BasicClientHandle;
-}
-
-struct FixedClientFactory {
+#[derive(Clone)]
+struct ClientFactory {
     loop_handle: Handle,
     name_server: SocketAddr,
 }
 
-impl FixedClientFactory {
-    pub fn new(loop_handle: Handle, name_server: SocketAddr) -> FixedClientFactory {
-        FixedClientFactory {
+impl ClientFactory {
+    pub fn new(loop_handle: Handle, name_server: SocketAddr) -> ClientFactory {
+        ClientFactory {
             loop_handle: loop_handle,
             name_server: name_server,
         }
     }
-}
 
-impl ClientFactory for FixedClientFactory {
     fn new_client(&self) -> BasicClientHandle {
         make_client(self.loop_handle.clone(), self.name_server)
     }
-}
 
-struct LevellingClientFactory {
-    dns_server_addrs: Rc<Vec<SocketAddr>>,
-    last_chosen: RefCell<usize>,
-    loop_handle: Handle,
-}
-
-impl LevellingClientFactory {
-    pub fn new<I>(dns_server_addrs: I, loop_handle: Handle) -> LevellingClientFactory 
-        where I: Into<Rc<Vec<SocketAddr>>>
-    {
-        LevellingClientFactory {
-            dns_server_addrs: dns_server_addrs.into(),
-            last_chosen: RefCell::from(0),
-            loop_handle: loop_handle,
-        }
-    }
-
-    pub fn next_namesrv(&self) -> SocketAddr {
-        let idx = (*self.last_chosen.borrow()) % self.dns_server_addrs.len();
-        (*self.last_chosen.borrow_mut()) += 1;
-        self.dns_server_addrs[idx]
-    }
-}
-
-impl ClientFactory for LevellingClientFactory {
-    fn new_client(&self) -> BasicClientHandle {
-        make_client(self.loop_handle.clone(), self.next_namesrv())
+    fn dns(&self) -> SocketAddr {
+        self.name_server
     }
 }
 
 pub struct TrustDNSResolver {
     loop_handle: Handle,
-    client_factory: Rc<LevellingClientFactory>,
     done_tx: mpsc::Sender<ResolveStatus>,
 }
 
 impl TrustDNSResolver {
-    pub fn new<I>(dns_server_addrs: I, loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self 
-        where I: Into<Rc<Vec<SocketAddr>>>
-    {
+    pub fn new(loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
-            client_factory: Rc::new(LevellingClientFactory::new(
-                dns_server_addrs,
-                loop_handle,
-            )),
             done_tx: done_tx
         }
     }
 }
 
 impl TrustDNSResolver {
-    pub fn resolve(&self, name: &str, query_type: QueryType) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
+    pub fn resolve(&self, dns: SocketAddr, name: &str, query_type: QueryType) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
+        let client_factory = ClientFactory::new(self.loop_handle.clone(), dns);
+        
+        self.done_tx.clone().send(ResolveStatus::Started).wait().unwrap();
         let done_tx = self.done_tx.clone();
         
         let future = match query_type {
-            QueryType::PTR => self.reverse_resolve(name),
-            _              => self.simple_resolve(name, query_type.into()),
+            QueryType::PTR => self.reverse_resolve(client_factory, name),
+            _              => self.simple_resolve(client_factory, name, query_type.into()),
         };
 
         let name = name.to_owned();
@@ -131,17 +96,17 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn simple_resolve(&self, name: &str, rtype: RecordType) -> Box<Future<Item=Message, Error=ResolverError>> {
+    fn simple_resolve(&self, client_factory: ClientFactory, name: &str, rtype: RecordType) -> Box<Future<Item=Message, Error=ResolverError>> {
         Box::new(
             Self::resolve_retry(
-                self.client_factory.clone(),
+                client_factory,
                 Name::parse(&name, Some(&Name::root())).unwrap(), 
                 DNSClass::IN, 
                 rtype, 
         ))
     }
 
-    fn reverse_resolve(&self, ip: &str) -> Box<Future<Item=Message, Error=ResolverError>> {
+    fn reverse_resolve(&self, client_factory: ClientFactory, ip: &str) -> Box<Future<Item=Message, Error=ResolverError>> {
         let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
         labels.reverse();
 
@@ -149,18 +114,19 @@ impl TrustDNSResolver {
     
         Box::new(
             self.recurse_ptr(
+                client_factory,
                 name,
                 DNSClass::IN, 
                 RecordType::PTR,
         ))
     }
 
-    fn recurse_ptr(&self, name: Name, query_class: DNSClass, query_type: RecordType) 
+    fn recurse_ptr(&self, client_factory: ClientFactory, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Message, Error=ResolverError>>
     {
         struct State {
             handle: Handle,
-            client_factory: Rc<ClientFactory>,
+            client_factory: ClientFactory,
             nameservers: Vec<NS>,
             visited: HashSet<NS>,
             answer: Option<Message>
@@ -193,8 +159,8 @@ impl TrustDNSResolver {
 
         let state = State {
             handle: self.loop_handle.clone(),
-            client_factory: self.client_factory.clone(),
-            nameservers: vec![NS::Known(self.client_factory.next_namesrv())],
+            client_factory: client_factory.clone(),
+            nameservers: vec![NS::Known(client_factory.dns())],
             visited: HashSet::new(),
             answer: None,
         };
@@ -228,7 +194,7 @@ impl TrustDNSResolver {
         }))
     }
 
-    fn resolve_with_ns(loop_handle: Handle, client_factory: Rc<ClientFactory>, nameserver: NS, name: Name, query_class: DNSClass, query_type: RecordType) 
+    fn resolve_with_ns(loop_handle: Handle, client_factory: ClientFactory, nameserver: NS, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Message, Error=ResolverError>>
     {
         debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
@@ -257,7 +223,7 @@ impl TrustDNSResolver {
         let future = ns_resolve.then(move |result| {
             match result {
                 Ok(Some(nameserver)) => Self::resolve_retry(
-                                        Rc::new(FixedClientFactory::new(loop_handle, nameserver)),
+                                        ClientFactory::new(loop_handle, nameserver),
                                         name.clone(),
                                         query_class, 
                                         query_type),
@@ -270,7 +236,7 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn resolve_retry(client_factory: Rc<ClientFactory>, name: Name, query_class: DNSClass, query_type: RecordType) 
+    fn resolve_retry(client_factory: ClientFactory, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Message, Error=ResolverError>>
     {
         struct State(RefCell<u32>, RefCell<Option<Message>>);

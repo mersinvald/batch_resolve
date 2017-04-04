@@ -10,6 +10,7 @@ use futures::stream;
 use futures::Future;
 use futures::future;
 
+use resolve::dns::dns_stream;
 use resolve::resolver::*;
 use resolve::error::ResolverError;
 use config::CONFIG;
@@ -20,10 +21,12 @@ pub struct Status {
     pub success: u64,
     pub fail: u64,
     pub errored: u64,
+    pub running: u64,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum ResolveStatus {
+    Started,
     Success,
     Failure,
     Error
@@ -65,7 +68,7 @@ impl<I> Batch<I>
     pub fn add_task(&mut self, input: I, output: OutVec, qtype: QueryType) {
         self.tasks.push(BatchTask::new(
             input,
-            TrustDNSResolver::new(CONFIG.dns_servers(), self.event_loop.handle(), self.done_tx.clone()),
+            TrustDNSResolver::new(self.event_loop.handle(), self.done_tx.clone()),
             qtype
         ));
         self.outputs.push(output)
@@ -81,7 +84,7 @@ impl<I> Batch<I>
             let out  = self.outputs.pop().unwrap();
 
             futures.push(task.resolve().and_then(move |result| {
-                (*out.borrow_mut()).extend(result);
+                uncell_mut!(*out).extend(result);
                 Ok(())
             }));
         }
@@ -94,11 +97,19 @@ impl<I> Batch<I>
         let status_fn = self.status_fn;
 
         handle.spawn(self.done_rx.for_each(move |resolve_status| {
-            status.done += 1;
+            trace!("Resolve status: received {:?}", resolve_status);
             match resolve_status {
-                ResolveStatus::Success => status.success += 1,
-                ResolveStatus::Failure => status.fail += 1,
-                ResolveStatus::Error   => status.errored += 1,
+                ResolveStatus::Started => status.running += 1,
+                other => {
+                    status.done += 1;
+                    status.running -= 1;
+                    match other {
+                        ResolveStatus::Success => status.success += 1,
+                        ResolveStatus::Failure => status.fail += 1,
+                        ResolveStatus::Error   => status.errored += 1,
+                        _ => ()
+                    }
+                }
             }
             status_fn(status);
             Ok(())
@@ -165,10 +176,17 @@ impl<I> BatchTask<I>
     fn resolve_stream(input: I, qtype: QueryType, resolver: TrustDNSResolver) -> Box<Stream<Item=Vec<String>, Error=ResolverError>> 
         where I: IntoIterator<Item=String>
     {
-        let stream = stream::iter::<_, _, ResolverError>(input.into_iter().map(|x| Ok(x)))
-            .map(move |name| resolver.resolve(&name, qtype))
-            .buffer_unordered(CONFIG.task_buffer_size());
+        //let futures = input.into_iterator()
+        let dns_store = CONFIG.dns_store();
+        let task_buffer_size = dns_store.overall_qps() + dns_store.average_qps();
 
-        Box::new(stream)
+        debug!("Task buffer size: {}", task_buffer_size);
+
+        let future = dns_stream(dns_store)
+            .zip(stream::iter(input.into_iter().map(|x| Ok(x))))
+            .map(move |(dns, name)| resolver.resolve(dns, &name, qtype))
+            .buffer_unordered(task_buffer_size);
+
+        Box::new(future)
     }
 }
