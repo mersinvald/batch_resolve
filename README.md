@@ -3,6 +3,8 @@
 [![Gitter](https://img.shields.io/badge/GITTER-join%20chat-green.svg)](https://gitter.im/batch_resolve/Lobby?utm_source=share-link&utm_medium=link&utm_campaign=share-link)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.me/mersinvald)
 
+This page in [Russian](README_RUS.md)
+
 # Batch Resolve
 
 Fast asynchronous DNS resolver
