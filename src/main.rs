@@ -28,7 +28,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Instant, Duration};
 
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::env;
 use std::io::stdout;
 
@@ -154,20 +154,20 @@ fn process_config(arg_path: Option<&str>) {
 }
 
 struct ResolveState {
-    pub result: Rc<RefCell<Vec<String>>>,
+    pub result: Arc<Mutex<Vec<String>>>,
     pub out_path: String
 }
 
 impl ResolveState {
     pub fn new(out_path: String) -> Self {
         ResolveState {
-            result: Rc::default(),
+            result: Arc::default(),
             out_path: out_path,
         }
     }
 
     pub fn unwrap(self) -> (Vec<String>, String) {
-        let result = Rc::try_unwrap(self.result).unwrap().into_inner();
+        let result = Arc::try_unwrap(self.result).unwrap().into_inner().unwrap();
         (result, self.out_path)
     }
 }
@@ -269,7 +269,6 @@ fn setup_logger(level: LogLevelFilter) {
     let format = |record: &LogRecord| {
         format!("{}: {}\t\t\t", record.level(), record.args())
     };
-
 
     let mut builder = LogBuilder::new();
     builder.format(format)

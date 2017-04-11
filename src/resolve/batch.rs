@@ -1,10 +1,12 @@
 // TODO check out patches in TrustDNS to store domains and ips as dictinct types.
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use tokio_core::reactor::Core;
 
-use futures::sync::mpsc;
+use std::thread;
+use std::sync::mpsc;
 use futures::Stream;
 use futures::stream;
 use futures::Future;
@@ -13,6 +15,8 @@ use futures::future;
 use resolve::dns::dns_stream;
 use resolve::resolver::*;
 use resolve::error::ResolverError;
+use resolve::resolver_threadpool::ResolverThreadPool;
+use resolve::resolver_threadpool::ResolveTask;
 use config::CONFIG;
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -32,7 +36,7 @@ pub enum ResolveStatus {
     Error
 }
 
-pub type OutVec = Rc<RefCell<Vec<String>>>;
+pub type OutVec = Arc<Mutex<Vec<String>>>;
 
 pub struct Batch<I> 
     where I: IntoIterator<Item=String> + 'static
@@ -40,8 +44,6 @@ pub struct Batch<I>
     event_loop:  Core,
     tasks:       Vec<BatchTask<I>>,
     outputs:     Vec<OutVec>,
-    done_tx:     mpsc::Sender<ResolveStatus>,
-    done_rx:     mpsc::Receiver<ResolveStatus>,
     status_fn:   Box<Fn(Status)>
 }
 
@@ -50,13 +52,10 @@ impl<I> Batch<I>
 {
     pub fn new() -> Self {
         let event_loop = Core::new().unwrap();
-        let (done_tx, done_rx) = mpsc::channel(1024);
         Batch {
             event_loop: event_loop,
             tasks: vec![],
             outputs: vec![],
-            done_tx: done_tx,
-            done_rx: done_rx,
             status_fn: Box::new(|_| ()),
         }
     }
@@ -68,7 +67,6 @@ impl<I> Batch<I>
     pub fn add_task(&mut self, input: I, output: OutVec, qtype: QueryType) {
         self.tasks.push(BatchTask::new(
             input,
-            TrustDNSResolver::new(self.event_loop.handle(), self.done_tx.clone()),
             qtype
         ));
         self.outputs.push(output)
@@ -77,26 +75,38 @@ impl<I> Batch<I>
     pub fn run(mut self) {
         let tasks_cnt = self.tasks.len();
 
-        let mut futures = vec![];
+        let (status_tx, status_rx) = mpsc::channel();
 
+        let mut resolve_pool = ResolverThreadPool::new(4, status_tx);
+        
+        // Run status task 
         for _ in 0..tasks_cnt {
             let task = self.tasks.pop().unwrap();
             let out  = self.outputs.pop().unwrap();
+            let (r_tx, r_rx) = mpsc::channel();
+            for name in task.input {
+                trace!("Spawning task {} {}", name, task.qtype);
+                resolve_pool.spawn(ResolveTask {
+                    tx: r_tx.clone(),
+                    name: name,
+                    qtype: task.qtype,
+                });
+            }
 
-            futures.push(task.resolve().and_then(move |result| {
-                uncell_mut!(*out).extend(result);
-                Ok(())
-            }));
+            thread::spawn(move || {
+                for result in r_rx {
+                    out.lock().unwrap().extend(result)
+                }
+            });
         }
 
-        let all_future = future::join_all(futures);
+        trace!("Starting resolve job on thread pool");
+        resolve_pool.start();
 
-        // Run status task 
-        let handle = self.event_loop.handle();
-        let mut status = Status::default();
         let status_fn = self.status_fn;
-
-        handle.spawn(self.done_rx.for_each(move |resolve_status| {
+        let mut status = Status::default();
+        
+        for resolve_status in status_rx {
             trace!("Resolve status: received {:?}", resolve_status);
             match resolve_status {
                 ResolveStatus::Started => status.running += 1,
@@ -112,11 +122,7 @@ impl<I> Batch<I>
                 }
             }
             status_fn(status);
-            Ok(())
-        }));
-        
-
-        self.event_loop.run(all_future).unwrap();
+        }
     }
 }
 
@@ -147,21 +153,19 @@ pub struct BatchTask<I>
 {
     input:    I,
     qtype:    QueryType,
-    resolver: TrustDNSResolver,
 }
 
 impl<I> BatchTask<I> 
     where I: IntoIterator<Item=String> + 'static,
 {
-    fn new(input: I, resolver: TrustDNSResolver, qtype: QueryType) -> Self {
+    fn new(input: I, qtype: QueryType) -> Self {
         BatchTask {
             input: input,
-            resolver: resolver,
             qtype: qtype
         }
     }
 
-    fn resolve(self) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
+   /* fn resolve(self) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
         let stream = Self::resolve_stream(self.input, self.qtype, self.resolver);
 
         // Flatten results
@@ -189,4 +193,5 @@ impl<I> BatchTask<I>
 
         Box::new(future)
     }
+    */
 }
