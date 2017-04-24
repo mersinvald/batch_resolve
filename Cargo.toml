@@ -1,7 +1,7 @@
 [package]
 name = "batch_resolve_cli"
 description = "Fast asynchronous batch DNS resolver built on top of Tokio and TRust-DNS"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Mike Lubinets <lubinetsm@yandex.ru>"]
 homepage = "http://github.com/mersinvald/batch_resolve"
 repository = "http://github.com/mersinvald/batch_resolve"
