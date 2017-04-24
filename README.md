@@ -52,19 +52,19 @@ $HOME/.config/batch_resolve.toml
 /etc/batch_resolve.toml
 ```
 
-Configuration includes DNS servers with their QPS properties and retries on failure count
+Configuration includes DNS servers, maximum simultaneously running resolve tasks and retries on failure count
 ```toml
-[[dns]]
-addr = "8.8.8.8:53" # Google primary DNS
-qps  = 1000         # How much queries per second will be performed on this DNS
-
+# DNS servers are only accepted as socket addresses
 # If port is not specified default DNS :53 port will be used
-[[dns]]
-addr = "8.8.4.4"    # Google secondary DNS
-qps  = 500
+dns = [
+    "8.8.8.8"
+]
+
+# Simultaneous resolve tasks
+tasks = 5000
 
 # Times to retry on connection timeout
-retry = 10
+retry = 5
 ```
 
 Configuration template can also be found [here](batch_resolve.toml)
