@@ -242,7 +242,7 @@ impl TrustDNSResolver {
         struct State(RefCell<u32>, RefCell<Option<Message>>);
         impl State {
             fn new() -> Self {
-                State(RefCell::new(CONFIG.timeout_retries()), RefCell::new(None))
+                State(RefCell::new(CONFIG.read().unwrap().timeout_retries()), RefCell::new(None))
             }
 
             fn next_step(state: Rc<Self>) -> Result<Loop<Rc<Self>, Rc<Self>>, ResolverError> {
