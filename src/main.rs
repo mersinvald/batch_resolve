@@ -1,6 +1,5 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
-#[macro_use] extern crate derive_new;
 extern crate serde;
 extern crate toml;
 
@@ -11,6 +10,8 @@ extern crate env_logger;
 extern crate futures;
 extern crate trust_dns;
 extern crate tokio_core;
+extern crate crossbeam;  
+extern crate num_cpus;                                                
 
 #[macro_use]
 mod macros;
@@ -20,7 +21,6 @@ use resolve::*;
 use config::*;
 
 use std::collections::{HashMap, HashSet};
-use std::cell::RefCell;
 use std::path::Path;
 use std::io::{self, Read, Write};
 use std::fs::File;
@@ -119,7 +119,7 @@ fn process_config(arg_path: Option<&str>) {
 
     let config_file = if let Some(arg_path) = arg_path {
         // Custom config is the only option when it is passed
-        debug!("Custom config path passed: {:?}", arg_path);
+        info!("Custom config path passed: {:?}", arg_path);
         let file = File::open(arg_path).unwrap_or_else(|error| {
             error!("failed to open custom config file {:?}: {}", arg_path, error);
             std::process::exit(1);
@@ -143,14 +143,17 @@ fn process_config(arg_path: Option<&str>) {
     if let Some(mut config_file) = config_file {
         let mut config_str = String::new();
         config_file.read_to_string(&mut config_str).unwrap();
-        CONFIG.parse(&config_str).unwrap_or_else(|e| {
+        CONFIG.write().unwrap().parse(&config_str).unwrap_or_else(|e| {
             error!("malformed configuration file: {}", e);
             std::process::exit(1);
         });
     }
 
-    debug!("Retries on timeout: {:?}", CONFIG.timeout_retries());
-    debug!("DNS Servers:        {:?}", CONFIG.dns_store().get_hosts());
+    {
+        let config = CONFIG.read().unwrap();
+        info!("Retries on timeout: {:?}", config.timeout_retries());
+        info!("DNS Servers:        {:?}", config.dns_list());
+    }
 }
 
 struct ResolveState {

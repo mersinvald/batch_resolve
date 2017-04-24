@@ -1,20 +1,14 @@
 # DNS servers are only accepted as socket addresses
 # If port is not specified default DNS :53 port will be used
-[[dns]]
-addr = "8.8.8.8"
-qps = 500
+dns = [
+    "8.8.8.8",
+    #"8.8.4.4",
+    #"77.88.8.8",
+    #"77.88.8.1:53"
+]
 
-[[dns]]
-addr = "8.8.8.4"
-qps = 500
-
-[[dns]]
-addr = "77.88.8.8"
-qps = 500
-
-[[dns]]
-addr = "77.88.8.1:53"
-qps = 500
+# Simultaneous resolve tasks
+tasks = 5000
 
 # Times to retry on connection timeout
 retry = 5
