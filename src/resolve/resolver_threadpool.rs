@@ -3,7 +3,6 @@ use std::thread;
 use std::net::SocketAddr;
 
 use tokio_core::reactor::Core;
-use futures;
 use futures::Stream;
 use futures::stream;
 use futures::Future;
@@ -40,7 +39,7 @@ impl ResolverThreadPool {
 
     pub fn start(self, status: mpsc::Sender<ResolveStatus>) {
         let tasks_cnt = self.tasks.len();
-        let chunk_size = tasks_cnt / self.workers_cnt;
+        let chunk_size = tasks_cnt / self.workers_cnt + 1;
         let sim_tasks = CONFIG.read().unwrap().tasks() as usize / self.workers_cnt ;
 
         crossbeam::scope(|scope| {
@@ -78,10 +77,9 @@ impl ResolverThread {
         debug!("Simultaneous tasks: {}", sim_tasks);
         let mut core = Core::new().unwrap();
         let handle = core.handle();
-        let (sa_tx, sa_rx) = futures::sync::mpsc::channel(1000);
 
-        {  
-            let resolver = TrustDNSResolver::new(handle.clone(), sa_tx);
+        let future = {  
+            let resolver = TrustDNSResolver::new(handle.clone(), status);
 
             let futures_stream =  {
                 let fs = tasks.into_iter()
@@ -98,17 +96,11 @@ impl ResolverThread {
                 .buffer_unordered(sim_tasks)
                 .collect();
 
-            handle.spawn(future.map(|_| ())
-                               .map_err(|_| ()));
+            future.map(|_| ())
+                  .map_err(|_| ())
         };
 
-        let status_future = sa_rx.for_each(move |s| {
-            trace!("Sending status: {:?}", s);
-            status.send(s).unwrap();
-            Ok(())
-        });
-
-        core.run(status_future).unwrap();
+        core.run(future).unwrap();
     }
 }
 

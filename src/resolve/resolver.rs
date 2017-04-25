@@ -4,12 +4,11 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::borrow::Borrow;
+use std::sync::mpsc;
 
 use futures::Future;
-use futures::Sink;
 use futures::future;
 use futures::future::Loop;
-use futures::sync::mpsc;
 use tokio_core::reactor::Handle;
 
 use trust_dns::client::{ClientFuture, BasicClientHandle, ClientHandle};
@@ -77,10 +76,12 @@ impl TrustDNSResolver {
 }
 
 impl TrustDNSResolver {
-    pub fn resolve(&self, dns: SocketAddr, name: &str, query_type: QueryType) -> Box<Future<Item=Vec<String>, Error=ResolverError>> {
+    pub fn resolve(&self, dns: SocketAddr, name: &str, query_type: QueryType) 
+        -> Box<Future<Item=Vec<String>, Error=ResolverError>> 
+    {
         let client_factory = ClientFactory::new(self.loop_handle.clone(), dns);
         
-        self.done_tx.clone().send(ResolveStatus::Started).wait().unwrap();
+        self.done_tx.send(ResolveStatus::Started).unwrap();
         let done_tx = self.done_tx.clone();
         
         let future = match query_type {
@@ -96,7 +97,9 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn simple_resolve(&self, client_factory: ClientFactory, name: &str, rtype: RecordType) -> Box<Future<Item=Message, Error=ResolverError>> {
+    fn simple_resolve(&self, client_factory: ClientFactory, name: &str, rtype: RecordType) 
+        -> Box<Future<Item=Message, Error=ResolverError>> 
+    {
         Box::new(
             Self::resolve_retry(
                 client_factory,
@@ -218,7 +221,7 @@ impl TrustDNSResolver {
                 )))
             }
         };
-
+    
         
         let future = ns_resolve.then(move |result| {
             match result {
@@ -383,20 +386,20 @@ impl<T> ReportStatus for Result<Vec<T>, ResolverError> {
     fn report_status(self, name: &str, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
         match self.as_ref() {
             Ok(vec) => if vec.is_empty() {
-                done_tx.send(ResolveStatus::Failure).wait().unwrap();
+                done_tx.send(ResolveStatus::Failure).unwrap();
             } else {
-                done_tx.send(ResolveStatus::Success).wait().unwrap();
+                done_tx.send(ResolveStatus::Success).unwrap();
             },
             Err(error) => {
                 match *error {
                     ResolverError::ConnectionTimeout |
                     ResolverError::NameServerNotResolved => {
                         debug!("failed to resolve {:?}: {}", name, error);
-                        done_tx.send(ResolveStatus::Failure).wait().unwrap();
+                        done_tx.send(ResolveStatus::Failure).unwrap();
                     }
                     _ => {
                         error!("failed to resolve {:?}: {}", name, error);
-                        done_tx.send(ResolveStatus::Error).wait().unwrap();
+                        done_tx.send(ResolveStatus::Error).unwrap();
                     }
                 }
             }

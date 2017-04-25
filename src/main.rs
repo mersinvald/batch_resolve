@@ -11,7 +11,7 @@ extern crate futures;
 extern crate trust_dns;
 extern crate tokio_core;
 extern crate crossbeam;  
-extern crate num_cpus;                                                
+extern crate num_cpus;                                              
 
 #[macro_use]
 mod macros;
