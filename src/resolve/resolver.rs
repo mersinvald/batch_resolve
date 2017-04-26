@@ -1,6 +1,5 @@
 use std::str;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::borrow::Borrow;
@@ -242,56 +241,63 @@ impl TrustDNSResolver {
     fn resolve_retry(client_factory: ClientFactory, name: Name, query_class: DNSClass, query_type: RecordType) 
         -> Box<Future<Item=Message, Error=ResolverError>>
     {
-        struct State(RefCell<u32>, RefCell<Option<Message>>);
+        struct State {
+            tries_left: Cell<u32>, 
+            message: Cell<Option<Message>>
+        };
+
         impl State {
             fn new() -> Self {
-                State(RefCell::new(CONFIG.read().unwrap().timeout_retries()), RefCell::new(None))
+                State {
+                    tries_left: Cell::new(CONFIG.read().unwrap().timeout_retries()), 
+                    message: Cell::new(None)
+                }
             }
 
-            fn next_step(state: Rc<Self>) -> Result<Loop<Rc<Self>, Rc<Self>>, ResolverError> {
-                *state.0.borrow_mut() -= 1;
-                if *state.0.borrow() > 0 { 
-                    Ok(Loop::Continue(state)) 
+            fn next_step(self) -> Result<Loop<Self, Self>, ResolverError> {
+                let old_value = self.tries_left.get();
+                self.tries_left.set(old_value - 1);
+
+                if self.tries_left.get() > 0 { 
+                    Ok(Loop::Continue(self)) 
                 } else { 
-                    Ok(Loop::Break(state))    
+                    Ok(Loop::Break(self))    
                 } 
             }
 
-            fn has_next_step(state: &Rc<Self>) -> bool {
-                *state.0.borrow() > 0
+            fn has_next_step(&self) -> bool {
+                self.tries_left.get() > 0
             }
 
-            fn set_message(state: &Rc<Self>, message: Option<Message>) {
-                *state.1.borrow_mut() = message
+            fn set_message(&self, message: Option<Message>) {
+                self.message.set(message)
             }
 
-            fn get_message(state: &Rc<Self>) -> Option<Message> {
-                state.1.borrow().clone()
+            fn into_message(self) -> Option<Message> {
+                self.message.into_inner()
             }
         }
 
-        let state = Rc::new(State::new());
+        let state = State::new();
 
         let retry_loop = {
             let name = name.clone();
 
             future::loop_fn(state, move |state| {
-                let and_state = state.clone();
-                let or_state = state.clone();
                 Self::_resolve(client_factory.new_client(), name.clone(), query_class, query_type)
                     .then(move |result| match result {
                         Ok(message) => {
                             trace!("Received DNS message: {:?}", message.answers()); 
-                            State::set_message(&state, Some(message)); 
-                            Ok(Loop::Break(and_state)) 
+                            state.set_message(Some(message)); 
+                            Ok(Loop::Break(state)) 
                         },
                         Err(err) => match *err.kind() {
                             ClientErrorKind::Timeout => {
-                                State::next_step(or_state)
+                                state.next_step()
                             },
                             ClientErrorKind::Canceled(e) => {
-                                if !State::has_next_step(&or_state) {error!("{}", e)}
-                                State::next_step(or_state)
+                                if !state.has_next_step() {error!("{}", e)}
+                                state.next_step()
                             },
                             _  => Err(ResolverError::DnsClientError(err))
                         },
@@ -303,7 +309,7 @@ impl TrustDNSResolver {
         let future = retry_loop.then(move |result| {
             match result {
                 Ok(state) => {
-                    let message = State::get_message(&state);
+                    let message = state.into_message();
                     match message {
                         Some(message) => Ok(message),
                         None     => Err(ResolverError::ConnectionTimeout),
