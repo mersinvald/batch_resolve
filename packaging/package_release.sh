@@ -19,6 +19,21 @@ cd packaging
 
 fpm -s dir -t deb --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve
 fpm -s dir -t rpm --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve
-fpm -s dir -t pacman --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve
 
 rm -rf temp/
+
+# Update aur package
+git clone ssh://aur@aur.archlinux.org/batch_resolve.git || exit 1
+cd batch_resolve
+sed -i "s/pkgver=.*/pkgver=$VERSION/g" PKGBUILD
+
+HASH=$(makepkg -g)
+sed -i "/md5sums=.*/d" PKGBUILD
+echo $HASH >> PKGBUILD
+
+makepkg --printsrcinfo > .SRCINFO
+
+cat PKGBUILD
+read
+
+git add PKGBUILD .SRCINFO && git commit -m "Version $VERSION" && git push
