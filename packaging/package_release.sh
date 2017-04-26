@@ -25,6 +25,7 @@ rm -rf temp/
 # Update aur package
 git clone ssh://aur@aur.archlinux.org/batch_resolve.git || exit 1
 cd batch_resolve
+pwd
 sed -i "s/pkgver=.*/pkgver=$VERSION/g" PKGBUILD
 
 HASH=$(makepkg -g)
@@ -34,6 +35,8 @@ echo $HASH >> PKGBUILD
 makepkg --printsrcinfo > .SRCINFO
 
 cat PKGBUILD
-read
 
 git add PKGBUILD .SRCINFO && git commit -m "Version $VERSION" && git push
+
+cd ..
+rm -rf batch_resolve/
