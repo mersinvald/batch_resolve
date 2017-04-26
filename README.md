@@ -90,6 +90,10 @@ Pull Requests are welcome also!
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
 
+## Acknowledgement
+* [TRust-DNS: A Rust based DNS client and server, built to be safe and secure from the ground up](https://github.com/bluejekyll/trust-dns)
+* [rust-musl-builder: Docker container for easily building static Rust binaries](https://github.com/emk/rust-musl-builder)gi
+
 ## Donate
 
 If you feel that this work is worth something and that it saved your time you can give me a cup of coffee :)
