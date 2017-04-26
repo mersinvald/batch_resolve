@@ -9,10 +9,14 @@ This page in [Russian](README_RUS.md)
 
 Fast asynchronous DNS resolver
 
-## Installing
-### Static binary
-Every release binary can be found in the [the list of versions](https://github.com/mersinvald/batch_resolve/tags). Place it to your binary folder and proceed to usage.
+## Install
+### Distro packages
+There are prebuilt *deb* and *rpm* packages for x86_64 you can find within the releases in [the list of versions](https://github.com/mersinvald/batch_resolve/tags)
 
+Arch Linux users can install the package [from AUR](https://aur.archlinux.org/packages/batch_resolve/)
+
+### Static binary
+Every release binary can be found in the [the list of versions](https://github.com/mersinvald/batch_resolve/tags). Just place it to one of directories in your PATH (e.g. /usr/bin)
 
 ### Install from crates.io
 If you have rust toolkit installed, you can install *batch_resolve* with

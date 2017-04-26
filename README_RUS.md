@@ -8,6 +8,10 @@
 Быстрый асинхронный DNS резолвер
 
 ## Установка
+### Пакеты
+Существуют универсальные deb и rpm пакеты, собранные под архитектуру x86_64, их можно найти в [списке релизов и файлов для загрузки.](https://github.com/mersinvald/batch_resolve/tags)
+
+Пользователи Arch Linux могут установить *batch_resolve* [из AUR](https://aur.archlinux.org/packages/batch_resolve/)
 ### Статический бинарник
 Для каждого релиза выпускается статический исполняемый файл: 
 [Список релизов и файлов для загрузки](https://github.com/mersinvald/batch_resolve/tags)
