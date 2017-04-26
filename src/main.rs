@@ -12,6 +12,7 @@ extern crate trust_dns;
 extern crate tokio_core;
 extern crate crossbeam;  
 extern crate num_cpus;                                              
+extern crate indicatif;
 
 #[macro_use]
 mod macros;
@@ -24,18 +25,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::io::{self, Read, Write};
 use std::fs::File;
-use std::sync::mpsc;
 use std::thread;
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 use std::sync::{Arc, Mutex};
 use std::env;
-use std::io::stdout;
 
 use clap::{Arg, App};
 
 use log::{LogRecord, LogLevelFilter};
 use env_logger::LogBuilder;
+
+use indicatif::{ProgressBar, ProgressStyle};
 
 fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
     let app = App::new("Batch Resolve")
@@ -196,36 +197,34 @@ fn main() {
     }
         
     // Create status output thread and register status callback
-    let (status_tx, status_rx) = mpsc::channel::<Status>();
-    
+    let status = Arc::new(Mutex::new(Status::default()));
+    let status_clone = status.clone();
+
     thread::spawn(move || {
+        let pb = ProgressBar::new(overall_count as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed}] [{wide_bar:.cyan/blue}] {pos}/{len} ({eta}) | {msg} {spinner:.green}")
+            .progress_chars("#>-"));
+
         // Print every 100ms
-        let mut instant = Instant::now();
-        for status in status_rx.iter() {
-            if instant.elapsed() > Duration::from_millis(100) {
-                let running = format!("{:6} running", status.running);
-                let done    = format!("{:6}/{} done", status.done, overall_count);
-                let success = format!("{:6}/{} succeded", status.success, overall_count);
-                let fail    = format!("{:6}/{} failed", status.fail, overall_count);
-                let error   = format!("{:6} errored", status.errored);
+        let mut status;
 
-                print!("{} {} {} {} {}\r", 
-                    running,
-                    done,
-                    success,
-                    fail,
-                    error
-                );
-
-                stdout().flush().unwrap();
-
-                instant = Instant::now();
-            }
+        while {
+            status = status_clone.lock().unwrap().clone();
+            status.done < overall_count as u64
+        } {
+            let message = format!("{} running | {} failed", status.running, status.fail);
+            pb.set_position(status.done);
+            pb.set_message(&message);
+            thread::sleep(Duration::from_millis(30));
         }
+
+        pb.finish_with_message("done");
     });
 
-    batch.register_status_callback(Box::new(move |status: Status| {
-        status_tx.send(status).unwrap(); 
+    
+    batch.register_status_callback(Box::new(move |s: Status| {
+        *status.lock().unwrap() = s;
     }));
 
     // Execute batch job
