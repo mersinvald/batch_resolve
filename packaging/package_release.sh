@@ -7,7 +7,7 @@ DESCRIPTION="Fast asynchronous DNS resolver"
 URL="https://github.com/mersinvald/batch_resolve"
 
 # Build statuc binary
-~/.bin/rust-musl-builder cargo build --release
+~/.bin/rust-musl-builder cargo build --release || exit 1
 
 # Make temp release dir
 mkdir -p packaging/temp
@@ -17,8 +17,8 @@ cp target/x86_64-unknown-linux-musl/release/batch_resolve packaging/temp
 
 cd packaging
 
-fpm -s dir -t deb --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve
-fpm -s dir -t rpm --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve
+fpm -s dir -t deb --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve ../batch_resolve.toml=/etc/batch_resolve.toml
+fpm -s dir -t rpm --version "$VERSION" --description "$DESCRIPTION" --url "$URL" --name "batch_resolve" --maintainer "$MAINTAINER" temp/batch_resolve=/usr/bin/batch_resolve ../batch_resolve.toml=/etc/batch_resolve.toml
 
 rm -rf temp/
 
