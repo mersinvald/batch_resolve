@@ -7,8 +7,8 @@ dns = [
     #"77.88.8.1:53"
 ]
 
-# Simultaneous resolve tasks
-tasks = 5000
+# How many queries to perform per second
+queries_per_second = 2000
 
 # Times to retry on connection timeout
 retry = 5

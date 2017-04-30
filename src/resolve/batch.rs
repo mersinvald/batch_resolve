@@ -14,6 +14,8 @@ pub struct Status {
     pub running: u64,
 }
 
+pub type StatusTx = mpsc::Sender<ResolveStatus>;
+
 #[derive(Copy, Clone, Debug)]
 pub enum ResolveStatus {
     Started,

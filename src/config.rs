@@ -15,7 +15,7 @@ lazy_static! {
     ];
 
     static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
-    static ref DEFAULT_TASKS: u32 = 5000;
+    static ref DEFAULT_QPS: u32 = 5000;
 
     pub static ref CONFIG: Arc<RwLock<Config>> = Arc::new(RwLock::new(Config::new()));
 }
@@ -23,7 +23,7 @@ lazy_static! {
 #[derive(Debug)]
 pub struct Config {
     dns_list: Vec<SocketAddr>,
-    tasks: u32,
+    qps: u32,
     timeout_retries: u32,
 }
 
@@ -31,7 +31,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             dns_list: DEFAULT_DNS_SERVERS.clone(),
-            tasks: *DEFAULT_TASKS,
+            qps: *DEFAULT_QPS,
             timeout_retries: *DEFAULT_TIMEOUT_RETRIES,
         }
     }
@@ -46,8 +46,8 @@ impl Config {
         self.timeout_retries
     }
 
-    pub fn tasks(&self) -> u32 {
-        self.tasks
+    pub fn qps(&self) -> u32 {
+        self.qps
     }
 
     pub fn dns_list(&self) -> &[SocketAddr] {
@@ -59,7 +59,7 @@ impl Config {
         struct Config {
             dns: Option<Vec<String>>,
             retry: Option<u32>,
-            tasks: Option<u32>,
+            queries_per_second: Option<u32>,
         }
 
         let mut cfg_fmt: Config = toml::from_str(string)?;
@@ -85,8 +85,8 @@ impl Config {
             self.timeout_retries = retry;
         }
 
-        if let Some(tasks) = cfg_fmt.tasks {
-            self.tasks = tasks;
+        if let Some(qps) = cfg_fmt.queries_per_second {
+            self.qps = qps;
         }
 
         Ok(())

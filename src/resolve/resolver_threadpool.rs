@@ -1,18 +1,21 @@
 use std::sync::mpsc;
 use std::thread;
 use std::net::SocketAddr;
+use std::time::{Instant, Duration};
 
 use tokio_core::reactor::Core;
 use futures::Stream;
+use futures::Sink;
 use futures::stream;
 use futures::Future;
+use futures::sync::mpsc as future_mpsc;
 
 use crossbeam;
 use num_cpus;
 
-use batch::QueryType;
+use resolve::batch::QueryType;
+use resolve::batch::StatusTx;
 use resolve::resolver::TrustDNSResolver;
-use resolve::batch::ResolveStatus;
 use resolve::error::ResolverError;
 use config::CONFIG;
 
@@ -37,20 +40,20 @@ impl ResolverThreadPool {
         self.tasks.push(task)
     }
 
-    pub fn start(self, status: mpsc::Sender<ResolveStatus>) {
+    pub fn start(self, status: StatusTx) {
         let tasks_cnt = self.tasks.len();
         let chunk_size = tasks_cnt / self.workers_cnt + 1;
-        let sim_tasks = CONFIG.read().unwrap().tasks() as usize / self.workers_cnt ;
+        let qps = CONFIG.read().unwrap().qps() as usize;
 
         crossbeam::scope(|scope| {
             scope.defer(|| debug!("Exiting crosspbeam scope"));
+            let mut trigger = TriggerTimer::new(qps, tasks_cnt);
+            
             for chunk in self.tasks.chunks(chunk_size) 
                 .map(|chunk| chunk.to_vec()) 
             {
+                let trigger_handle = trigger.get_handle();
                 let status = status.clone();
-                let dns = CONFIG.read().unwrap()
-                    .dns_list()
-                    .to_vec();
 
                 scope.spawn(move || {
                     let thread = thread::current(); 
@@ -58,46 +61,92 @@ impl ResolverThreadPool {
                         .unwrap_or("Unknown");
 
                     debug!("Started worker thread ({})", tname);
-                    ResolverThread::thread_fn(chunk, status, dns, sim_tasks);
+                    ResolverThread::thread_main(chunk, status, trigger_handle);
                     debug!("Terminated worker thread: ({})", tname);
                 });
             }
+
+            let dns = CONFIG.read().unwrap().dns_list().to_vec();
+            scope.spawn(move || {
+                trigger.thread_main(dns)
+            });
         })
     }
 }
 
-struct ResolverThread;
 
+type TriggerTx = future_mpsc::Sender<SocketAddr>;
+type TriggerRx = future_mpsc::Receiver<SocketAddr>;
+
+struct TriggerTimer {
+    handles: Vec<TriggerTx>,
+    qps: usize,
+    triggered: usize,
+    tasks_cnt: usize,
+}
+
+impl TriggerTimer {
+    pub fn new(qps: usize, tasks_cnt: usize) -> Self {
+        TriggerTimer {
+            handles: vec![],
+            qps: qps,
+            triggered: 0,
+            tasks_cnt: tasks_cnt
+        }
+    }
+
+    pub fn get_handle(&mut self) -> TriggerRx {
+        let (tx, rx) = future_mpsc::channel(self.qps as usize);
+        self.handles.push(tx);
+        rx
+    }
+
+    pub fn thread_main(mut self, dns_list: Vec<SocketAddr>) {
+        let duration_second = Duration::from_secs(1);
+
+        while self.triggered < self.tasks_cnt {
+            let start = Instant::now();
+            self.trigger_qps(&dns_list);
+            let end = Instant::now();
+            
+            let diff = end - start;
+            if diff < duration_second {
+                thread::sleep(duration_second - diff);
+            }
+        }
+    }
+
+    fn trigger_qps(&mut self, dns_list: &[SocketAddr]) {
+        let qps_per_handle = (self.qps as f32 / self.handles.len() as f32).ceil() as u32;
+        debug!("Triggering {} requests per thread", qps_per_handle);
+        for handle in &mut self.handles {
+            for i in 0..qps_per_handle {
+                let dns = dns_list[i as usize % dns_list.len()];
+                handle.send(dns).wait().unwrap();
+                self.triggered += 1;
+            }
+        }
+    }
+}
+
+struct ResolverThread;
 impl ResolverThread {
-    fn thread_fn(tasks: Vec<ResolveTask>, 
-                 status: mpsc::Sender<ResolveStatus>, 
-                 dns: Vec<SocketAddr>,
-                 sim_tasks: usize) 
+    fn thread_main(tasks: Vec<ResolveTask>, 
+                 status: StatusTx, 
+                 task_trigger: TriggerRx) 
     {
-        debug!("Simultaneous tasks: {}", sim_tasks);
         let mut core = Core::new().unwrap();
         let handle = core.handle();
+        let qps = CONFIG.read().unwrap().qps();
 
-        let future = {  
+        let future = {
             let resolver = TrustDNSResolver::new(handle.clone(), status);
 
-            let futures_stream =  {
-                let fs = tasks.into_iter()
-                    .enumerate()
-                    .map(move |(idx, task)| {
-                        let idx = idx % dns.len();
-                        let dns = dns[idx];
-                        task.resolve(&resolver, dns)
-                    });
-                stream::iter::<_, _, _>(fs.map(|x| Ok(x)))
-            };
-
-            let future = futures_stream
-                .buffer_unordered(sim_tasks)
-                .collect();
-
-            future.map(|_| ())
-                  .map_err(|_| ())
+            stream::iter::<_,_,_>(tasks.into_iter().map(|x| Ok(x)))
+                .zip(task_trigger).map(move |(task, dns)| 
+                    task.resolve(&resolver, dns).map_err(|_| ()))
+                .buffer_unordered(qps as usize)
+                .collect()
         };
 
         core.run(future).unwrap();

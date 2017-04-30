@@ -56,7 +56,7 @@ $HOME/.config/batch_resolve.toml
 /etc/batch_resolve.toml
 ```
 
-Configuration includes DNS servers, maximum simultaneously running resolve tasks and retries on failure count
+Configuration includes DNS servers, queries per second amount and retries on failure count
 ```toml
 # DNS servers are only accepted as socket addresses
 # If port is not specified default DNS :53 port will be used
@@ -64,8 +64,8 @@ dns = [
     "8.8.8.8"
 ]
 
-# Simultaneous resolve tasks
-tasks = 5000
+# How many queries to perform per second
+queries_per_second = 2000
 
 # Times to retry on connection timeout
 retry = 5

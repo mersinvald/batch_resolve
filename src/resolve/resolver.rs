@@ -3,7 +3,6 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::borrow::Borrow;
-use std::sync::mpsc;
 
 use futures::Future;
 use futures::future;
@@ -21,7 +20,7 @@ use trust_dns::op::message::Message;
 use trust_dns::error::ClientErrorKind;
 
 use resolve::error::*;
-use resolve::batch::{ResolveStatus, QueryType};
+use resolve::batch::{StatusTx, ResolveStatus, QueryType};
 use config::CONFIG;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
@@ -62,14 +61,14 @@ impl ClientFactory {
 
 pub struct TrustDNSResolver {
     loop_handle: Handle,
-    done_tx: mpsc::Sender<ResolveStatus>,
+    status_tx: StatusTx,
 }
 
 impl TrustDNSResolver {
-    pub fn new(loop_handle: Handle, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
+    pub fn new(loop_handle: Handle, status_tx: StatusTx) -> Self {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
-            done_tx: done_tx
+            status_tx: status_tx
         }
     }
 }
@@ -80,8 +79,8 @@ impl TrustDNSResolver {
     {
         let client_factory = ClientFactory::new(self.loop_handle.clone(), dns);
         
-        self.done_tx.send(ResolveStatus::Started).unwrap();
-        let done_tx = self.done_tx.clone();
+        self.status_tx.send(ResolveStatus::Started).unwrap();
+        let status_tx = self.status_tx.clone();
         
         let future = match query_type {
             QueryType::PTR => self.reverse_resolve(client_factory, name),
@@ -90,7 +89,7 @@ impl TrustDNSResolver {
 
         let name = name.to_owned();
         let future = future.map(move |msg| msg.extract_answer(query_type))
-            .then(move |rv| rv.report_status(&name, done_tx))
+            .then(move |rv| rv.report_status(&name, status_tx))
             .then(move |rv| rv.partial_ok());
 
         Box::new(future)
@@ -385,27 +384,27 @@ impl ExtractAnswer for Message {
 }
 
 trait ReportStatus {
-    fn report_status(self, name: &str, done_tx: mpsc::Sender<ResolveStatus>) -> Self;    
+    fn report_status(self, name: &str, status_tx: StatusTx) -> Self;    
 }
 
 impl<T> ReportStatus for Result<Vec<T>, ResolverError> {
-    fn report_status(self, name: &str, done_tx: mpsc::Sender<ResolveStatus>) -> Self {
+    fn report_status(self, name: &str, status_tx: StatusTx) -> Self {
         match self.as_ref() {
             Ok(vec) => if vec.is_empty() {
-                done_tx.send(ResolveStatus::Failure).unwrap();
+                status_tx.send(ResolveStatus::Failure).unwrap();
             } else {
-                done_tx.send(ResolveStatus::Success).unwrap();
+                status_tx.send(ResolveStatus::Success).unwrap();
             },
             Err(error) => {
                 match *error {
                     ResolverError::ConnectionTimeout |
                     ResolverError::NameServerNotResolved => {
                         debug!("failed to resolve {:?}: {}", name, error);
-                        done_tx.send(ResolveStatus::Failure).unwrap();
+                        status_tx.send(ResolveStatus::Failure).unwrap();
                     }
                     _ => {
                         error!("failed to resolve {:?}: {}", name, error);
-                        done_tx.send(ResolveStatus::Error).unwrap();
+                        status_tx.send(ResolveStatus::Error).unwrap();
                     }
                 }
             }
