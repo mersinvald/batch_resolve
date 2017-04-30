@@ -15,6 +15,7 @@ There are prebuilt *deb* and *rpm* packages for x86_64 you can find within the r
 
 Arch Linux users can install the package [from AUR](https://aur.archlinux.org/packages/batch_resolve/)
 
+Packages install the config file into /etc/batch_resolve.toml
 ### Static binary
 Every release binary can be found in the [the list of versions](https://github.com/mersinvald/batch_resolve/tags). Just place it to one of directories in your PATH (e.g. /usr/bin)
 
