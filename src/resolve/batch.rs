@@ -1,4 +1,3 @@
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
 
@@ -24,13 +23,14 @@ pub enum ResolveStatus {
     Error
 }
 
-pub type OutVec = Arc<Mutex<Vec<String>>>;
+pub type ResolvedTx = mpsc::Sender<String>;
+pub type ResolvedRx = mpsc::Receiver<String>;
 
 pub struct Batch<I> 
     where I: IntoIterator<Item=String> + 'static
 {
     tasks:       Vec<BatchTask<I>>,
-    outputs:     Vec<OutVec>,
+    outputs:     Vec<ResolvedTx>,
     status_fn:   Box<Fn(Status) + Send>
 }
 
@@ -49,7 +49,7 @@ impl<I> Batch<I>
         self.status_fn = func
     }
 
-    pub fn add_task(&mut self, input: I, output: OutVec, qtype: QueryType) {
+    pub fn add_task(&mut self, input: I, output: ResolvedTx, qtype: QueryType) {
         self.tasks.push(BatchTask::new(
             input,
             qtype
@@ -68,21 +68,15 @@ impl<I> Batch<I>
         for _ in 0..tasks_cnt {
             let task = self.tasks.pop().unwrap();
             let out  = self.outputs.pop().unwrap();
-            let (r_tx, r_rx) = mpsc::channel();
+
             for name in task.input {
                 trace!("Spawning task {} {}", name, task.qtype);
                 resolve_pool.spawn(ResolveTask {
-                    tx: r_tx.clone(),
+                    tx: out.clone(),
                     name: name,
                     qtype: task.qtype,
                 });
             }
-
-            thread::spawn(move || {
-                for result in r_rx {
-                    out.lock().unwrap().extend(result)
-                }
-            });
         }
 
         let status_fn = self.status_fn;

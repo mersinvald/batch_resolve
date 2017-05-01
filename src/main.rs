@@ -28,7 +28,9 @@ use std::fs::File;
 use std::thread;
 use std::time::Duration;
 
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+
 use std::env;
 
 use clap::{Arg, App};
@@ -157,22 +159,17 @@ fn process_config(arg_path: Option<&str>) {
     }
 }
 
-struct ResolveState {
-    pub result: Arc<Mutex<Vec<String>>>,
+struct ResolveResult {
+    pub resolved_rx: ResolvedRx,
     pub out_path: String
 }
 
-impl ResolveState {
-    pub fn new(out_path: String) -> Self {
-        ResolveState {
-            result: Arc::default(),
-            out_path: out_path,
+impl ResolveResult {
+    pub fn new(resolved_rx: ResolvedRx, out_path: String) -> Self {
+        ResolveResult {
+            resolved_rx,
+            out_path,
         }
-    }
-
-    pub fn unwrap(self) -> (Vec<String>, String) {
-        let result = Arc::try_unwrap(self.result).unwrap().into_inner().unwrap();
-        (result, self.out_path)
     }
 }
 
@@ -191,8 +188,9 @@ fn main() {
 
         overall_count += input_data.len();
 
-        let rresult = ResolveState::new(output);
-        batch.add_task(input_data, rresult.result.clone(), qtype);
+        let (resolved_tx, resolved_rx) = mpsc::channel();
+        let rresult = ResolveResult::new(resolved_rx, output);
+        batch.add_task(input_data, resolved_tx, qtype);
         resolve_states.push(rresult);
     }
         
@@ -201,6 +199,7 @@ fn main() {
     let status_clone = status.clone();
 
     thread::spawn(move || {
+        debug!("Starting status printer thread");
         let pb = ProgressBar::new(overall_count as u64);
         pb.set_style(ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed}] [{wide_bar:.cyan/blue}] {pos}/{len} ({eta}) | {msg} {spinner:.green}")
@@ -220,6 +219,7 @@ fn main() {
         }
 
         pb.finish_with_message("done");
+        debug!("Terminating status printer thread");
     });
 
     
@@ -233,9 +233,9 @@ fn main() {
     // Merge all data with common output path
     let mut data_sinks = HashMap::new();
     for resolved in resolve_states.into_iter() {
-        let (data, path) = resolved.unwrap();
-        let entry = data_sinks.entry(path).or_insert(HashSet::new());
-        (*entry).extend(data);
+        let entry = data_sinks.entry(resolved.out_path)
+                              .or_insert(HashSet::new());
+        (*entry).extend(resolved.resolved_rx);
     }
 
     // Merge data into files
