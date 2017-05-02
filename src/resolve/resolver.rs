@@ -24,16 +24,9 @@ use resolve::batch::{StatusTx, ResolveStatus, QueryType};
 use config::CONFIG;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
-    let (stream, stream_handle) = UdpClientStream::new(
-        name_server, loop_handle.clone()
-    );
+    let (stream, stream_handle) = UdpClientStream::new(name_server, loop_handle.clone());
 
-    ClientFuture::new(
-        stream,
-        stream_handle,
-        loop_handle,
-        None
-    )
+    ClientFuture::new(stream, stream_handle, loop_handle, None)
 }
 
 #[derive(Clone)]
@@ -68,23 +61,25 @@ impl TrustDNSResolver {
     pub fn new(loop_handle: Handle, status_tx: StatusTx) -> Self {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
-            status_tx: status_tx
+            status_tx: status_tx,
         }
     }
 }
 
 impl TrustDNSResolver {
-    pub fn resolve(&self, dns: SocketAddr, name: &str, query_type: QueryType) 
-        -> Box<Future<Item=Vec<String>, Error=ResolverError>> 
-    {
+    pub fn resolve(&self,
+                   dns: SocketAddr,
+                   name: &str,
+                   query_type: QueryType)
+                   -> Box<Future<Item = Vec<String>, Error = ResolverError>> {
         let client_factory = ClientFactory::new(self.loop_handle.clone(), dns);
-        
+
         self.status_tx.send(ResolveStatus::Started).unwrap();
         let status_tx = self.status_tx.clone();
-        
+
         let future = match query_type {
             QueryType::PTR => self.reverse_resolve(client_factory, name),
-            _              => self.simple_resolve(client_factory, name, query_type.into()),
+            _ => self.simple_resolve(client_factory, name, query_type.into()),
         };
 
         let name = name.to_owned();
@@ -95,42 +90,41 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn simple_resolve(&self, client_factory: ClientFactory, name: &str, rtype: RecordType) 
-        -> Box<Future<Item=Message, Error=ResolverError>> 
-    {
-        Box::new(
-            Self::resolve_retry(
-                client_factory,
-                Name::parse(&name, Some(&Name::root())).unwrap(), 
-                DNSClass::IN, 
-                rtype, 
-        ))
+    fn simple_resolve(&self,
+                      client_factory: ClientFactory,
+                      name: &str,
+                      rtype: RecordType)
+                      -> Box<Future<Item = Message, Error = ResolverError>> {
+        Box::new(Self::resolve_retry(client_factory,
+                                     Name::parse(&name, Some(&Name::root())).unwrap(),
+                                     DNSClass::IN,
+                                     rtype))
     }
 
-    fn reverse_resolve(&self, client_factory: ClientFactory, ip: &str) -> Box<Future<Item=Message, Error=ResolverError>> {
+    fn reverse_resolve(&self,
+                       client_factory: ClientFactory,
+                       ip: &str)
+                       -> Box<Future<Item = Message, Error = ResolverError>> {
         let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
         labels.reverse();
 
         let name = Name::with_labels(labels).label("in-addr").label("arpa");
-    
-        Box::new(
-            self.recurse_ptr(
-                client_factory,
-                name,
-                DNSClass::IN, 
-                RecordType::PTR,
-        ))
+
+        Box::new(self.recurse_ptr(client_factory, name, DNSClass::IN, RecordType::PTR))
     }
 
-    fn recurse_ptr(&self, client_factory: ClientFactory, name: Name, query_class: DNSClass, query_type: RecordType) 
-        -> Box<Future<Item=Message, Error=ResolverError>>
-    {
+    fn recurse_ptr(&self,
+                   client_factory: ClientFactory,
+                   name: Name,
+                   query_class: DNSClass,
+                   query_type: RecordType)
+                   -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
             handle: Handle,
             client_factory: ClientFactory,
             nameservers: Vec<NS>,
             visited: HashSet<NS>,
-            answer: Option<Message>
+            answer: Option<Message>,
         }
 
         impl State {
@@ -141,9 +135,9 @@ impl TrustDNSResolver {
                 })
             }
 
-            pub fn push_nameservers<I, B>(&mut self, iter: I) 
-                where I: IntoIterator<Item=B>,
-                    B: Borrow<Name>
+            pub fn push_nameservers<I, B>(&mut self, iter: I)
+                where I: IntoIterator<Item = B>,
+                      B: Borrow<Name>
             {
                 let new_nameservers = iter.into_iter()
                     .map(NS::try_from)
@@ -195,9 +189,13 @@ impl TrustDNSResolver {
         }))
     }
 
-    fn resolve_with_ns(loop_handle: Handle, client_factory: ClientFactory, nameserver: NS, name: Name, query_class: DNSClass, query_type: RecordType) 
-        -> Box<Future<Item=Message, Error=ResolverError>>
-    {
+    fn resolve_with_ns(loop_handle: Handle,
+                        client_factory: ClientFactory,
+                        nameserver: NS,
+                        name: Name,
+                        query_class: DNSClass,
+                        query_type: RecordType)
+                        -> Box<Future<Item = Message, Error = ResolverError>> {
         debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
         let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
             NS::Known(addr) => future::ok(Some(addr)).boxed(),
@@ -237,19 +235,21 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn resolve_retry(client_factory: ClientFactory, name: Name, query_class: DNSClass, query_type: RecordType) 
-        -> Box<Future<Item=Message, Error=ResolverError>>
-    {
+    fn resolve_retry(client_factory: ClientFactory,
+                     name: Name,
+                     query_class: DNSClass,
+                     query_type: RecordType)
+                     -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
-            tries_left: Cell<u32>, 
-            message: Cell<Option<Message>>
+            tries_left: Cell<u32>,
+            message: Cell<Option<Message>>,
         };
 
         impl State {
             fn new() -> Self {
                 State {
-                    tries_left: Cell::new(CONFIG.read().unwrap().timeout_retries()), 
-                    message: Cell::new(None)
+                    tries_left: Cell::new(CONFIG.read().unwrap().timeout_retries()),
+                    message: Cell::new(None),
                 }
             }
 
@@ -257,11 +257,11 @@ impl TrustDNSResolver {
                 let old_value = self.tries_left.get();
                 self.tries_left.set(old_value - 1);
 
-                if self.tries_left.get() > 0 { 
-                    Ok(Loop::Continue(self)) 
-                } else { 
-                    Ok(Loop::Break(self))    
-                } 
+                if self.tries_left.get() > 0 {
+                    Ok(Loop::Continue(self))
+                } else {
+                    Ok(Loop::Break(self))
+                }
             }
 
             fn has_next_step(&self) -> bool {
@@ -321,16 +321,12 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
-    fn _resolve(mut client: BasicClientHandle, name: Name, query_class: DNSClass, query_type: RecordType) 
-        -> Box<Future<Item=Message, Error=ClientError>>
-    {
-        Box::new(
-            client.query(
-                name,
-                query_class,
-                query_type
-            )
-        )
+    fn _resolve(mut client: BasicClientHandle,
+                name: Name,
+                query_class: DNSClass,
+                query_type: RecordType)
+                -> Box<Future<Item = Message, Error = ClientError>> {
+        Box::new(client.query(name, query_class, query_type))
     }
 }
 
@@ -343,7 +339,7 @@ trait FromRecord<B>
     fn from(r: B, qtype: QueryType) -> Option<Self>;
 }
 
-impl<B> FromRecord<B> for String 
+impl<B> FromRecord<B> for String
     where B: Borrow<Record>
 {
     fn from(r: B, qtype: QueryType) -> Option<Self> {
@@ -359,13 +355,8 @@ impl<B> FromRecord<B> for String
                 }
             }
         }
-    
-        variants_to_string!(
-            A, 
-            AAAA,
-            NS,
-            PTR
-        )  
+
+        variants_to_string!(A, AAAA, NS, PTR)
     }
 }
 
@@ -375,7 +366,8 @@ trait ExtractAnswer {
 
 impl ExtractAnswer for Message {
     fn extract_answer(&self, qtype: QueryType) -> Vec<String> {
-        self.answers().into_iter() 
+        self.answers()
+            .into_iter()
             .map(|record| <String as FromRecord<_>>::from(record, qtype))
             .filter(Option::is_some)
             .map(Option::unwrap)
@@ -384,17 +376,19 @@ impl ExtractAnswer for Message {
 }
 
 trait ReportStatus {
-    fn report_status(self, name: &str, status_tx: StatusTx) -> Self;    
+    fn report_status(self, name: &str, status_tx: StatusTx) -> Self;
 }
 
 impl<T> ReportStatus for Result<Vec<T>, ResolverError> {
     fn report_status(self, name: &str, status_tx: StatusTx) -> Self {
         match self.as_ref() {
-            Ok(vec) => if vec.is_empty() {
-                status_tx.send(ResolveStatus::Failure).unwrap();
-            } else {
-                status_tx.send(ResolveStatus::Success).unwrap();
-            },
+            Ok(vec) => {
+                if vec.is_empty() {
+                    status_tx.send(ResolveStatus::Failure).unwrap();
+                } else {
+                    status_tx.send(ResolveStatus::Success).unwrap();
+                }
+            }
             Err(error) => {
                 match *error {
                     ResolverError::ConnectionTimeout |
@@ -410,7 +404,7 @@ impl<T> ReportStatus for Result<Vec<T>, ResolverError> {
             }
         }
         self
-    }    
+    }
 }
 
 trait PartialOk<T> {
@@ -422,10 +416,9 @@ impl<T> PartialOk<T> for Result<Vec<T>, ResolverError> {
         match self {
             Err(ResolverError::ConnectionTimeout) |
             Err(ResolverError::NameServerNotResolved) |
-            Err(ResolverError::NotFound) 
-                     => Ok(vec![]),
-            Ok(vec)  => Ok(vec),
-            Err(err) => Err(err)
+            Err(ResolverError::NotFound) => Ok(vec![]),
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err),
         }
     }
 }
@@ -433,21 +426,21 @@ impl<T> PartialOk<T> for Result<Vec<T>, ResolverError> {
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 enum NS {
     Known(SocketAddr),
-    Unknown(String)
+    Unknown(String),
 }
 
 impl NS {
     pub fn to_string(&self) -> String {
         match *self {
             NS::Known(ref addr) => addr.to_string(),
-            NS::Unknown(ref dom) => dom.clone()
+            NS::Unknown(ref dom) => dom.clone(),
         }
     }
 
-    pub fn try_from<B>(name: B) -> Result<NS, ()> 
+    pub fn try_from<B>(name: B) -> Result<NS, ()>
         where B: Borrow<Name>
     {
-        let name = name.borrow(); 
+        let name = name.borrow();
         if name.num_labels() != 0 {
             Ok(NS::Unknown(name.to_string()))
         } else {

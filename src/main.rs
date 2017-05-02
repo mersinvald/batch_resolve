@@ -114,11 +114,8 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
 }
 
 fn process_config(arg_path: Option<&str>) {
-    let default_config_locations = vec![
-        "batch_resolve.toml",
-        "$HOME/.config/batch_resolve.toml",
-        "/etc/batch_resolve.toml",
-    ];
+    let default_config_locations =
+        vec!["batch_resolve.toml", "$HOME/.config/batch_resolve.toml", "/etc/batch_resolve.toml"];
 
     let config_file = if let Some(arg_path) = arg_path {
         // Custom config is the only option when it is passed
@@ -132,12 +129,16 @@ fn process_config(arg_path: Option<&str>) {
         let mut file = None;
         for config_path in default_config_locations {
             match File::open(config_path) {
-                Err(err) => debug!("failed to open default config file {:?}: {}", config_path, err),
-                Ok(f) => { 
+                Err(err) => {
+                    debug!("failed to open default config file {:?}: {}",
+                           config_path,
+                           err)
+                }
+                Ok(f) => {
                     file = Some(f);
-                    break
-                },
-                
+                    break;
+                }
+
             }
         }
         file
@@ -161,7 +162,7 @@ fn process_config(arg_path: Option<&str>) {
 
 struct ResolveResult {
     pub resolved_rx: ResolvedRx,
-    pub out_path: String
+    pub out_path: String,
 }
 
 impl ResolveResult {
@@ -177,7 +178,7 @@ fn main() {
     let (inputs, outputs, qtypes) = process_args();
 
     let mut overall_count = 0;
-    let mut resolve_states = vec![];
+    let mut resolve_results = vec![];
     let mut batch = Batch::new();
 
     for (&qtype, (input, output)) in qtypes.iter().zip(inputs.iter().zip(outputs.into_iter())) {
@@ -191,9 +192,9 @@ fn main() {
         let (resolved_tx, resolved_rx) = mpsc::channel();
         let rresult = ResolveResult::new(resolved_rx, output);
         batch.add_task(input_data, resolved_tx, qtype);
-        resolve_states.push(rresult);
+        resolve_results.push(rresult);
     }
-        
+
     // Create status output thread and register status callback
     let status = Arc::new(Mutex::new(Status::default()));
     let status_clone = status.clone();
@@ -222,19 +223,16 @@ fn main() {
         debug!("Terminating status printer thread");
     });
 
-    
-    batch.register_status_callback(Box::new(move |s: Status| {
-        *status.lock().unwrap() = s;
-    }));
+
+    batch.register_status_callback(Box::new(move |s: Status| { *status.lock().unwrap() = s; }));
 
     // Execute batch job
     batch.run();
 
     // Merge all data with common output path
     let mut data_sinks = HashMap::new();
-    for resolved in resolve_states.into_iter() {
-        let entry = data_sinks.entry(resolved.out_path)
-                              .or_insert(HashSet::new());
+    for resolved in resolve_results.into_iter() {
+        let entry = data_sinks.entry(resolved.out_path).or_insert(HashSet::new());
         (*entry).extend(resolved.resolved_rx);
     }
 
@@ -252,7 +250,9 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
 }
 
 // TODO merge data by output and by query type
-fn write_file<'a, I: IntoIterator<Item=String>, P: AsRef<Path>>(data: I, path: P) -> io::Result<()> {
+fn write_file<'a, I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
+                                                                  path: P)
+                                                                  -> io::Result<()> {
     // Open file for writing
     let mut file = File::create(path)?;
 
@@ -268,16 +268,13 @@ fn write_file<'a, I: IntoIterator<Item=String>, P: AsRef<Path>>(data: I, path: P
 }
 
 fn setup_logger(level: LogLevelFilter) {
-    let format = |record: &LogRecord| {
-        format!("{}: {}\t\t\t", record.level(), record.args())
-    };
+    let format = |record: &LogRecord| format!("{}: {}\t\t\t", record.level(), record.args());
 
     let mut builder = LogBuilder::new();
-    builder.format(format)
-           .filter(Some("batch_resolve"), level);
+    builder.format(format).filter(Some("batch_resolve"), level);
 
     if env::var("RUST_LOG").is_ok() {
-       builder.parse(&env::var("RUST_LOG").unwrap());
+        builder.parse(&env::var("RUST_LOG").unwrap());
     }
 
     builder.init().unwrap();

@@ -71,9 +71,7 @@ impl Config {
                 if !dns.contains(":") {
                     dns.push_str(":53")
                 }
-                dns_servers.push(
-                    dns.parse()?
-                );
+                dns_servers.push(dns.parse()?);
             }
 
             debug!("{:?}", dns_servers);
@@ -96,14 +94,14 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     AddrParseError(AddrParseError),
-    TomlParseError(toml::de::Error)
+    TomlParseError(toml::de::Error),
 }
 
 impl Error for ConfigError {
     fn description(&self) -> &str {
         match *self {
             ConfigError::AddrParseError(ref err) => err.description(),
-            ConfigError::TomlParseError(ref err) => err.description()
+            ConfigError::TomlParseError(ref err) => err.description(),
         }
     }
 }
