@@ -117,7 +117,7 @@ impl TrustDNSResolver {
                    client_factory: ClientFactory,
                    name: Name,
                    query_class: DNSClass,
-                   query_type: RecordType)
+                   record_type: RecordType)
                    -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
             handle: Handle,
@@ -165,7 +165,7 @@ impl TrustDNSResolver {
                 state.handle.clone(),
                 state.client_factory.clone(),
                 state.pop_ns().unwrap(),
-                name.clone(), query_class, query_type
+                name.clone(), query_class, record_type
             ).map(move |message| {
                 state.push_nameservers(message.name_servers().iter().map(Record::name));
                 state.add_answer(message);
@@ -194,7 +194,7 @@ impl TrustDNSResolver {
                         nameserver: NS,
                         name: Name,
                         query_class: DNSClass,
-                        query_type: RecordType)
+                        record_type: RecordType)
                         -> Box<Future<Item = Message, Error = ResolverError>> {
         debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
         let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
@@ -225,7 +225,7 @@ impl TrustDNSResolver {
                                         ClientFactory::new(loop_handle, nameserver),
                                         name.clone(),
                                         query_class, 
-                                        query_type),
+                                        record_type),
                 Ok(None) => future::err(ResolverError::NameServerNotResolved).boxed(),
                 Err(err) => future::err(err).boxed(),
 
@@ -238,7 +238,7 @@ impl TrustDNSResolver {
     fn resolve_retry(client_factory: ClientFactory,
                      name: Name,
                      query_class: DNSClass,
-                     query_type: RecordType)
+                     record_type: RecordType)
                      -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
             tries_left: Cell<u32>,
@@ -283,7 +283,7 @@ impl TrustDNSResolver {
             let name = name.clone();
 
             future::loop_fn(state, move |state| {
-                Self::_resolve(client_factory.new_client(), name.clone(), query_class, query_type)
+                Self::_resolve(client_factory.new_client(), name.clone(), query_class, record_type)
                     .then(move |result| match result {
                         Ok(message) => {
                             trace!("Received DNS message: {:?}", message.answers()); 
@@ -324,9 +324,9 @@ impl TrustDNSResolver {
     fn _resolve(mut client: BasicClientHandle,
                 name: Name,
                 query_class: DNSClass,
-                query_type: RecordType)
+                record_type: RecordType)
                 -> Box<Future<Item = Message, Error = ClientError>> {
-        Box::new(client.query(name, query_class, query_type))
+        Box::new(client.query(name, query_class, record_type))
     }
 }
 
