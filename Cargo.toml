@@ -32,3 +32,6 @@ indicatif = "0.1.0"
 version = "0.10"
 default-features = false
 features = ["openssl"]
+
+[profile.release]
+lto = true
