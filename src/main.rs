@@ -14,8 +14,6 @@ extern crate crossbeam;
 extern crate num_cpus;                                              
 extern crate indicatif;
 
-#[macro_use]
-mod macros;
 mod resolve;
 mod config;
 use resolve::*;
