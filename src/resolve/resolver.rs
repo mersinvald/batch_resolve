@@ -1,5 +1,4 @@
 use std::str;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::borrow::Borrow;
@@ -241,23 +240,21 @@ impl TrustDNSResolver {
                      record_type: RecordType)
                      -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
-            tries_left: Cell<u32>,
-            message: Cell<Option<Message>>,
+            tries_left: u32,
+            message: Option<Message>,
         };
 
         impl State {
             fn new() -> Self {
                 State {
-                    tries_left: Cell::new(CONFIG.read().unwrap().timeout_retries()),
-                    message: Cell::new(None),
+                    tries_left: CONFIG.read().unwrap().timeout_retries(),
+                    message: None,
                 }
             }
 
-            fn next_step(self) -> Result<Loop<Self, Self>, ResolverError> {
-                let old_value = self.tries_left.get();
-                self.tries_left.set(old_value - 1);
-
-                if self.tries_left.get() > 0 {
+            fn next_step(mut self) -> Result<Loop<Self, Self>, ResolverError> {
+                self.tries_left -= 1;
+                if self.tries_left > 0 {
                     Ok(Loop::Continue(self))
                 } else {
                     Ok(Loop::Break(self))
@@ -265,37 +262,37 @@ impl TrustDNSResolver {
             }
 
             fn has_next_step(&self) -> bool {
-                self.tries_left.get() > 0
+                self.tries_left > 0
             }
 
-            fn set_message(&self, message: Option<Message>) {
-                self.message.set(message)
+            fn with_message(mut self, message: Message) -> State {
+                self.message = Some(message);
+                self
             }
 
             fn into_message(self) -> Option<Message> {
-                self.message.into_inner()
+                self.message
             }
         }
 
         let state = State::new();
 
         let retry_loop = {
-            let name = name.clone();
-
             future::loop_fn(state, move |state| {
                 Self::_resolve(client_factory.new_client(), name.clone(), query_class, record_type)
                     .then(move |result| match result {
                         Ok(message) => {
                             trace!("Received DNS message: {:?}", message.answers()); 
-                            state.set_message(Some(message)); 
-                            Ok(Loop::Break(state)) 
+                            Ok(Loop::Break(state.with_message(message))) 
                         },
                         Err(err) => match *err.kind() {
                             ClientErrorKind::Timeout => {
                                 state.next_step()
                             },
                             ClientErrorKind::Canceled(e) => {
-                                if !state.has_next_step() {error!("{}", e)}
+                                if !state.has_next_step() { 
+                                    error!("{}", e) 
+                                }
                                 state.next_step()
                             },
                             _  => Err(ResolverError::DnsClientError(err))
@@ -311,7 +308,7 @@ impl TrustDNSResolver {
                     let message = state.into_message();
                     match message {
                         Some(message) => Ok(message),
-                        None     => Err(ResolverError::ConnectionTimeout),
+                        None => Err(ResolverError::ConnectionTimeout),
                     }
                 },
                 Err(err) => Err(err)
