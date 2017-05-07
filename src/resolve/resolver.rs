@@ -54,6 +54,7 @@ impl ClientFactory {
 pub struct TrustDNSResolver {
     loop_handle: Handle,
     status_tx: StatusTx,
+    timeout_retries: u32,
 }
 
 impl TrustDNSResolver {
@@ -61,6 +62,7 @@ impl TrustDNSResolver {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
             status_tx: status_tx,
+            timeout_retries: CONFIG.read().unwrap().timeout_retries()
         }
     }
 }
@@ -95,6 +97,7 @@ impl TrustDNSResolver {
                       rtype: RecordType)
                       -> Box<Future<Item = Message, Error = ResolverError>> {
         Box::new(Self::resolve_retry(client_factory,
+                                     self.timeout_retries,
                                      Name::parse(&name, Some(&Name::root())).unwrap(),
                                      DNSClass::IN,
                                      rtype))
@@ -151,6 +154,7 @@ impl TrustDNSResolver {
             }
         }
 
+        let timeout_retries = self.timeout_retries;
         let state = State {
             handle: self.loop_handle.clone(),
             client_factory: client_factory.clone(),
@@ -163,6 +167,7 @@ impl TrustDNSResolver {
             Self::resolve_with_ns(
                 state.handle.clone(),
                 state.client_factory.clone(),
+                timeout_retries,
                 state.pop_ns().unwrap(),
                 name.clone(), query_class, record_type
             ).map(move |message| {
@@ -190,6 +195,7 @@ impl TrustDNSResolver {
 
     fn resolve_with_ns(loop_handle: Handle,
                         client_factory: ClientFactory,
+                        timeout_retries: u32,
                         nameserver: NS,
                         name: Name,
                         query_class: DNSClass,
@@ -201,6 +207,7 @@ impl TrustDNSResolver {
             NS::Unknown(domain) => {
                 Box::new(Self::resolve_retry(
                     client_factory.clone(),
+                    timeout_retries,
                     Name::parse(&domain, Some(&Name::root())).unwrap(), 
                     DNSClass::IN, 
                     RecordType::A,
@@ -222,6 +229,7 @@ impl TrustDNSResolver {
             match result {
                 Ok(Some(nameserver)) => Self::resolve_retry(
                                         ClientFactory::new(loop_handle, nameserver),
+                                        timeout_retries,
                                         name.clone(),
                                         query_class, 
                                         record_type),
@@ -235,6 +243,7 @@ impl TrustDNSResolver {
     }
 
     fn resolve_retry(client_factory: ClientFactory,
+                     timeout_retries: u32,
                      name: Name,
                      query_class: DNSClass,
                      record_type: RecordType)
@@ -245,9 +254,9 @@ impl TrustDNSResolver {
         };
 
         impl State {
-            fn new() -> Self {
+            fn new(tries: u32) -> Self {
                 State {
-                    tries_left: CONFIG.read().unwrap().timeout_retries(),
+                    tries_left: tries,
                     message: None,
                 }
             }
@@ -275,7 +284,7 @@ impl TrustDNSResolver {
             }
         }
 
-        let state = State::new();
+        let state = State::new(timeout_retries);
 
         let retry_loop = {
             future::loop_fn(state, move |state| {
