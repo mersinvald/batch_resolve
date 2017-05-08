@@ -15,7 +15,7 @@ lazy_static! {
     ];
 
     static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
-    static ref DEFAULT_QPS: u32 = 5000;
+    static ref DEFAULT_QPS: u32 = 500;
 
     pub static ref CONFIG: Arc<RwLock<Config>> = Arc::new(RwLock::new(Config::new()));
 }
