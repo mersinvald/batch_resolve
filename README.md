@@ -62,7 +62,8 @@ Configuration includes DNS servers, queries per second amount and retries on fai
 # DNS servers are only accepted as socket addresses
 # If port is not specified default DNS :53 port will be used
 dns = [
-    "8.8.8.8"
+    "8.8.8.8",
+    "8.8.4.4"
 ]
 
 # How many queries to perform per second
