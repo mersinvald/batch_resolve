@@ -66,7 +66,11 @@ dns = [
 ]
 
 # How many queries to perform per second
-queries_per_second = 2000
+# WARNING: Google Public DNS guaranteed to handle 500 requests per second max
+# Please make sure that resolve results do not vary with higher request rates
+# before using high QPS configuration in production.
+# Alternatively you can use your own local caching DNS server.
+queries_per_second = 500
 
 # Times to retry on connection timeout
 retry = 5
