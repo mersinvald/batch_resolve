@@ -20,22 +20,22 @@ pub enum ResolveStatus {
     Started,
     Success,
     Failure,
-    Error
+    Error,
 }
 
 pub type ResolvedTx = mpsc::Sender<String>;
 pub type ResolvedRx = mpsc::Receiver<String>;
 
-pub struct Batch<I> 
-    where I: IntoIterator<Item=String> + 'static
+pub struct Batch<I>
+    where I: IntoIterator<Item = String> + 'static
 {
-    tasks:       Vec<BatchTask<I>>,
-    outputs:     Vec<ResolvedTx>,
-    status_fn:   Box<Fn(Status) + Send>
+    tasks: Vec<BatchTask<I>>,
+    outputs: Vec<ResolvedTx>,
+    status_fn: Box<Fn(Status) + Send>,
 }
 
-impl<I> Batch<I> 
-    where I: IntoIterator<Item=String> + 'static,
+impl<I> Batch<I>
+    where I: IntoIterator<Item = String> + 'static
 {
     pub fn new() -> Self {
         Batch {
@@ -50,10 +50,7 @@ impl<I> Batch<I>
     }
 
     pub fn add_task(&mut self, input: I, output: ResolvedTx, qtype: QueryType) {
-        self.tasks.push(BatchTask::new(
-            input,
-            qtype
-        ));
+        self.tasks.push(BatchTask::new(input, qtype));
         self.outputs.push(output)
     }
 
@@ -63,11 +60,11 @@ impl<I> Batch<I>
         let (status_tx, status_rx) = mpsc::channel();
 
         let mut resolve_pool = ResolverThreadPool::num_cpus();
-        
+
         // Spawn resolve tasks
         for _ in 0..tasks_cnt {
             let task = self.tasks.pop().unwrap();
-            let out  = self.outputs.pop().unwrap();
+            let out = self.outputs.pop().unwrap();
 
             for name in task.input {
                 trace!("Spawning task {} {}", name, task.qtype);
@@ -95,8 +92,8 @@ impl<I> Batch<I>
                         match other {
                             ResolveStatus::Success => status.success += 1,
                             ResolveStatus::Failure => status.fail += 1,
-                            ResolveStatus::Error   => status.errored += 1,
-                            _ => ()
+                            ResolveStatus::Error => status.errored += 1,
+                            _ => (),
                         }
                     }
                 }
@@ -105,8 +102,8 @@ impl<I> Batch<I>
         });
 
         trace!("Starting resolve job on a thread pool");
-        resolve_pool.start(status_tx); 
-        trace!("Finished resolve");       
+        resolve_pool.start(status_tx);
+        trace!("Finished resolve");
     }
 }
 
@@ -124,28 +121,28 @@ use trust_dns::rr::RecordType;
 impl Into<RecordType> for QueryType {
     fn into(self) -> RecordType {
         match self {
-            QueryType::A    => RecordType::A,
+            QueryType::A => RecordType::A,
             QueryType::AAAA => RecordType::AAAA,
-            QueryType::PTR  => RecordType::PTR,
-            QueryType::NS   => RecordType::NS
+            QueryType::PTR => RecordType::PTR,
+            QueryType::NS => RecordType::NS,
         }
-    } 
+    }
 }
 
-pub struct BatchTask<I> 
-    where I: IntoIterator<Item=String>
+pub struct BatchTask<I>
+    where I: IntoIterator<Item = String>
 {
-    input:    I,
-    qtype:    QueryType,
+    input: I,
+    qtype: QueryType,
 }
 
-impl<I> BatchTask<I> 
-    where I: IntoIterator<Item=String> + 'static,
+impl<I> BatchTask<I>
+    where I: IntoIterator<Item = String> + 'static
 {
     fn new(input: I, qtype: QueryType) -> Self {
         BatchTask {
             input: input,
-            qtype: qtype
+            qtype: qtype,
         }
     }
 }

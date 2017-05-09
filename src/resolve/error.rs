@@ -20,9 +20,9 @@ impl fmt::Display for ResolverError {
 impl Error for ResolverError {
     fn description(&self) -> &str {
         match *self {
-            ResolverError::ConnectionTimeout       => "Connection timeout",
-            ResolverError::NameServerNotResolved   => "Failed to resolve nameserver", 
-            ResolverError::NotFound                => "Not found",
+            ResolverError::ConnectionTimeout => "Connection timeout",
+            ResolverError::NameServerNotResolved => "Failed to resolve nameserver", 
+            ResolverError::NotFound => "Not found",
             ResolverError::DnsClientError(ref err) => err.description(),
         }
     }

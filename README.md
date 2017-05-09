@@ -62,11 +62,16 @@ Configuration includes DNS servers, queries per second amount and retries on fai
 # DNS servers are only accepted as socket addresses
 # If port is not specified default DNS :53 port will be used
 dns = [
-    "8.8.8.8"
+    "8.8.8.8",
+    "8.8.4.4"
 ]
 
 # How many queries to perform per second
-queries_per_second = 2000
+# WARNING: Google Public DNS guaranteed to handle 500 requests per second max
+# Please make sure that resolve results do not vary with higher request rates
+# before using high QPS configuration in production.
+# Alternatively you can use your own local caching DNS server.
+queries_per_second = 500
 
 # Times to retry on connection timeout
 retry = 5

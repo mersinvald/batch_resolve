@@ -23,14 +23,14 @@ use config::CONFIG;
 
 pub struct ResolverThreadPool {
     tasks: Vec<ResolveTask>,
-    workers_cnt: usize
+    workers_cnt: usize,
 }
 
 impl ResolverThreadPool {
     pub fn new(num_cpus: usize) -> Self {
         ResolverThreadPool {
             tasks: vec![],
-            workers_cnt: num_cpus
+            workers_cnt: num_cpus,
         }
     }
 
@@ -51,17 +51,14 @@ impl ResolverThreadPool {
         crossbeam::scope(|scope| {
             scope.defer(|| debug!("Exiting crosspbeam scope"));
             let mut trigger = TriggerTimer::new(tasks_cnt, worker_qps);
-            
-            for chunk in self.tasks.chunks(chunk_size) 
-                .map(|chunk| chunk.to_vec()) 
-            {
+
+            for chunk in self.tasks.chunks(chunk_size).map(|chunk| chunk.to_vec()) {
                 let trigger_handle = trigger.get_handle();
                 let status = status.clone();
 
                 scope.spawn(move || {
-                    let thread = thread::current(); 
-                    let tname = thread.name()
-                        .unwrap_or("Unknown");
+                    let thread = thread::current();
+                    let tname = thread.name().unwrap_or("Unknown");
 
                     debug!("Started worker thread ({})", tname);
                     ResolverThread::thread_main(chunk, status, trigger_handle, worker_qps);
@@ -69,7 +66,10 @@ impl ResolverThreadPool {
                 });
             }
 
-            let dns = CONFIG.read().unwrap().dns_list().to_vec();
+            let dns = CONFIG.read()
+                .unwrap()
+                .dns_list()
+                .to_vec();
             scope.spawn(move || {
                 debug!("Started qps trigger thread");
                 trigger.thread_main(dns);
@@ -88,7 +88,6 @@ struct TriggerTimer {
     worker_qps: usize,
     triggered: Cell<usize>,
     tasks_cnt: usize,
-    
 }
 
 impl TriggerTimer {
@@ -97,7 +96,7 @@ impl TriggerTimer {
             handles: vec![],
             worker_qps: worker_qps,
             triggered: Cell::new(0),
-            tasks_cnt: tasks_cnt
+            tasks_cnt: tasks_cnt,
         }
     }
 
@@ -114,7 +113,7 @@ impl TriggerTimer {
             let start = Instant::now();
             self.trigger_qps(&dns_list);
             let end = Instant::now();
-            
+
             let diff = end - start;
             if diff < duration_second {
                 thread::sleep(duration_second - diff);
@@ -124,7 +123,7 @@ impl TriggerTimer {
 
     fn trigger_qps(&mut self, dns_list: &[SocketAddr]) {
         debug!("Triggering {} requests per thread", self.worker_qps);
-        
+
         // Futures sending request triggers
         let mut send_list = vec![];
 
@@ -139,7 +138,7 @@ impl TriggerTimer {
                     Ok(())
                 });
                 send_list.push(future);
-            }   
+            }
         }
 
         future::join_all(send_list).wait().unwrap();
@@ -148,20 +147,19 @@ impl TriggerTimer {
 
 struct ResolverThread;
 impl ResolverThread {
-    fn thread_main(tasks: Vec<ResolveTask>, 
-                   status: StatusTx, 
+    fn thread_main(tasks: Vec<ResolveTask>,
+                   status: StatusTx,
                    task_trigger: TriggerRx,
-                   qps: usize) 
-    {
+                   qps: usize) {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
 
         let future = {
             let resolver = TrustDNSResolver::new(handle.clone(), status);
 
-            stream::iter::<_,_,_>(tasks.into_iter().map(|x| Ok(x)))
-                .zip(task_trigger).map(move |(task, dns)| 
-                    task.resolve(&resolver, dns).map_err(|_| ()))
+            stream::iter::<_, _, _>(tasks.into_iter().map(|x| Ok(x)))
+                .zip(task_trigger)
+                .map(move |(task, dns)| task.resolve(&resolver, dns).map_err(|_| ()))
                 .buffer_unordered(qps)
                 .collect()
         };
@@ -178,18 +176,18 @@ pub struct ResolveTask {
 }
 
 impl ResolveTask {
-    pub fn resolve(&self, resolver: &TrustDNSResolver, dns: SocketAddr) 
-        -> Box<Future<Item=(), Error=ResolverError>>
-    {
+    pub fn resolve(&self,
+                   resolver: &TrustDNSResolver,
+                   dns: SocketAddr)
+                   -> Box<Future<Item = (), Error = ResolverError>> {
         let tx = self.tx.clone();
 
-        let future = resolver.resolve(dns, &self.name, self.qtype)
-            .and_then(move |results| {
-                for result in results {
-                    tx.send(result).unwrap()
-                }
-                Ok(())
-            });
+        let future = resolver.resolve(dns, &self.name, self.qtype).and_then(move |results| {
+            for result in results {
+                tx.send(result).unwrap()
+            }
+            Ok(())
+        });
 
         Box::new(future)
     }

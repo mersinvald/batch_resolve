@@ -15,7 +15,7 @@ lazy_static! {
     ];
 
     static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
-    static ref DEFAULT_QPS: u32 = 5000;
+    static ref DEFAULT_QPS: u32 = 500;
 
     pub static ref CONFIG: Arc<RwLock<Config>> = Arc::new(RwLock::new(Config::new()));
 }
@@ -71,9 +71,7 @@ impl Config {
                 if !dns.contains(":") {
                     dns.push_str(":53")
                 }
-                dns_servers.push(
-                    dns.parse()?
-                );
+                dns_servers.push(dns.parse()?);
             }
 
             debug!("{:?}", dns_servers);
@@ -96,14 +94,14 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     AddrParseError(AddrParseError),
-    TomlParseError(toml::de::Error)
+    TomlParseError(toml::de::Error),
 }
 
 impl Error for ConfigError {
     fn description(&self) -> &str {
         match *self {
             ConfigError::AddrParseError(ref err) => err.description(),
-            ConfigError::TomlParseError(ref err) => err.description()
+            ConfigError::TomlParseError(ref err) => err.description(),
         }
     }
 }
