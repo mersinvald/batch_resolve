@@ -77,6 +77,7 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
             .multiple(true)
         );
 
+    // Save help message to use later on errors
     let mut help_msg = Vec::new();
     app.write_help(&mut help_msg).unwrap();
     let help_msg = String::from_utf8(help_msg).unwrap();
@@ -112,6 +113,7 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
 }
 
 fn process_config(arg_path: Option<&str>) {
+    // Config locations in priority-descending order
     let default_config_locations =
         vec!["batch_resolve.toml", "$HOME/.config/batch_resolve.toml", "/etc/batch_resolve.toml"];
 
@@ -142,6 +144,7 @@ fn process_config(arg_path: Option<&str>) {
         file
     };
 
+    // Load config into the static CONFIG entry
     if let Some(mut config_file) = config_file {
         let mut config_str = String::new();
         config_file.read_to_string(&mut config_str).unwrap();
@@ -151,13 +154,14 @@ fn process_config(arg_path: Option<&str>) {
         });
     }
 
-    {
-        let config = CONFIG.read().unwrap();
-        info!("Retries on timeout: {:?}", config.timeout_retries());
-        info!("DNS Servers:        {:?}", config.dns_list());
-    }
+    // Info to make sure right config is loaded on startup
+    let config = CONFIG.read().unwrap();
+    info!("Retries on timeout: {:?}", config.timeout_retries());
+    info!("Queries Per Second: {:?}", config.qps());
+    info!("DNS Servers:        {:?}", config.dns_list());
 }
 
+// mpsc::Receiver of resolve results and output file path
 struct ResolveResult {
     pub resolved_rx: ResolvedRx,
     pub out_path: String,
@@ -195,7 +199,9 @@ fn main() {
 
     // Create status output thread and register status callback
     let status = Arc::new(Mutex::new(Status::default()));
-    let status_clone = status.clone();
+    let callback_status = status.clone();
+
+    batch.register_status_callback(Box::new(move |s: Status| { *callback_status.lock().unwrap() = s; }));
 
     thread::spawn(move || {
         debug!("Starting status printer thread");
@@ -204,15 +210,13 @@ fn main() {
             .template("{spinner:.green} [{elapsed}] [{wide_bar:.cyan/blue}] {pos}/{len} ({eta}) | {msg} {spinner:.green}")
             .progress_chars("#>-"));
 
-        // Print every 100ms
-        let mut status;
-
+        let mut s;
         while {
-            status = status_clone.lock().unwrap().clone();
-            status.done < overall_count as u64
+            s = status.lock().unwrap().clone();
+            s.done < overall_count as u64
         } {
-            let message = format!("{} running | {} failed", status.running, status.fail);
-            pb.set_position(status.done);
+            let message = format!("{} running | {} failed", s.running, s.fail);
+            pb.set_position(s.done);
             pb.set_message(&message);
             thread::sleep(Duration::from_millis(30));
         }
@@ -221,13 +225,10 @@ fn main() {
         debug!("Terminating status printer thread");
     });
 
-
-    batch.register_status_callback(Box::new(move |s: Status| { *status.lock().unwrap() = s; }));
-
     // Execute batch job
     batch.run();
 
-    // Merge all data with common output path
+    // Merge all results with common output pathes
     let mut data_sinks = HashMap::new();
     for resolved in resolve_results.into_iter() {
         let entry = data_sinks.entry(resolved.out_path).or_insert(HashSet::new());
@@ -247,7 +248,6 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
     Ok(buffer.lines().map(String::from).collect())
 }
 
-// TODO merge data by output and by query type
 fn write_file<'a, I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
                                                                   path: P)
                                                                   -> io::Result<()> {

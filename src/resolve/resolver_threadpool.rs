@@ -79,7 +79,6 @@ impl ResolverThreadPool {
     }
 }
 
-
 type TriggerTx = future_mpsc::Sender<SocketAddr>;
 type TriggerRx = future_mpsc::Receiver<SocketAddr>;
 
@@ -157,6 +156,8 @@ impl ResolverThread {
         let future = {
             let resolver = TrustDNSResolver::new(handle.clone(), status);
 
+            // Zipping with stream of triggering messages binds each resolve task launch time
+            // to the triggering timer.
             stream::iter::<_, _, _>(tasks.into_iter().map(|x| Ok(x)))
                 .zip(task_trigger)
                 .map(move |(task, dns)| task.resolve(&resolver, dns).map_err(|_| ()))

@@ -91,6 +91,7 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
+    // Simple DNS lookup queries
     fn simple_resolve(&self,
                       client_factory: ClientFactory,
                       name: &str,
@@ -103,6 +104,7 @@ impl TrustDNSResolver {
                                      rtype))
     }
 
+    // Reverse DNS queries
     fn reverse_resolve(&self,
                        client_factory: ClientFactory,
                        ip: &str)
@@ -115,12 +117,15 @@ impl TrustDNSResolver {
         Box::new(self.recurse_ptr(client_factory, name, DNSClass::IN, RecordType::PTR))
     }
 
+    // Recursive DNS request for PTR queries
     fn recurse_ptr(&self,
                    client_factory: ClientFactory,
                    name: Name,
                    query_class: DNSClass,
                    record_type: RecordType)
                    -> Box<Future<Item = Message, Error = ResolverError>> {
+        // Because recursion is not possible with futures this implementation of Depth-First lookup
+        // uses state with discovered nameservers excluding visited ones to avoid infinite loops
         struct State {
             handle: Handle,
             client_factory: ClientFactory,
@@ -193,6 +198,8 @@ impl TrustDNSResolver {
         }))
     }
 
+    // Perform DNS query with some nameserver. 
+    // If nameserver is not a SocketAddr, resolve the domain first.
     fn resolve_with_ns(loop_handle: Handle,
                         client_factory: ClientFactory,
                         timeout_retries: u32,
@@ -242,6 +249,7 @@ impl TrustDNSResolver {
         Box::new(future)
     }
 
+    // Retry-on-timeout enabled resolve
     fn resolve_retry(client_factory: ClientFactory,
                      timeout_retries: u32,
                      name: Name,
