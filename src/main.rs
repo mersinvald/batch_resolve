@@ -126,22 +126,13 @@ fn process_config(arg_path: Option<&str>) {
         });
         Some(file)
     } else {
-        let mut file = None;
-        for config_path in default_config_locations {
-            match File::open(config_path) {
-                Err(err) => {
-                    debug!("failed to open default config file {:?}: {}",
-                           config_path,
-                           err)
-                }
-                Ok(f) => {
-                    file = Some(f);
-                    break;
-                }
-
-            }
-        }
-        file
+        default_config_locations.iter()
+            .filter_map(|path| File::open(path)
+                .map_err(|err| debug!("failed to open default config file {:?}: {}",
+                               path,
+                               err))
+                .ok())
+            .next()
     };
 
     // Load config into the static CONFIG entry
@@ -149,7 +140,7 @@ fn process_config(arg_path: Option<&str>) {
         let mut config_str = String::new();
         config_file.read_to_string(&mut config_str).unwrap();
         CONFIG.write().unwrap().parse(&config_str).unwrap_or_else(|e| {
-            error!("malformed configuration file: {}", e);
+            error!("malformed configuration file:\n {}", e);
             std::process::exit(1);
         });
     }
