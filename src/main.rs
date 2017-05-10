@@ -230,13 +230,13 @@ fn main() {
 
     // Merge all results with common output pathes
     let mut data_sinks = HashMap::new();
-    for resolved in resolve_results.into_iter() {
-        let entry = data_sinks.entry(resolved.out_path).or_insert(HashSet::new());
+    for resolved in resolve_results {
+        let entry = data_sinks.entry(resolved.out_path).or_insert_with(HashSet::new);
         (*entry).extend(resolved.resolved_rx);
     }
 
     // Merge data into files
-    for (path, data) in data_sinks.into_iter() {
+    for (path, data) in data_sinks {
         write_file(data, path).unwrap();
     }
 }
@@ -248,9 +248,9 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
     Ok(buffer.lines().map(String::from).collect())
 }
 
-fn write_file<'a, I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
-                                                                  path: P)
-                                                                  -> io::Result<()> {
+fn write_file<I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
+                                                              path: P)
+                                                              -> io::Result<()> {
     // Open file for writing
     let mut file = File::create(path)?;
 
@@ -258,8 +258,8 @@ fn write_file<'a, I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
     let mut data = data.into_iter().collect::<Vec<_>>();
     data.sort();
     for item in &data {
-        file.write(item.as_bytes())?;
-        file.write(b"\n")?;
+        file.write_all(item.as_bytes())?;
+        file.write_all(b"\n")?;
     }
 
     Ok(())

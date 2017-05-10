@@ -68,7 +68,7 @@ impl Config {
             let mut dns_servers = Vec::new();
 
             for dns in &mut dns_fmt_vec {
-                if !dns.contains(":") {
+                if !dns.contains(':') {
                     dns.push_str(":53")
                 }
                 dns_servers.push(dns.parse()?);

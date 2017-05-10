@@ -158,7 +158,7 @@ impl ResolverThread {
 
             // Zipping with stream of triggering messages binds each resolve task launch time
             // to the triggering timer.
-            stream::iter::<_, _, _>(tasks.into_iter().map(|x| Ok(x)))
+            stream::iter::<_, _, _>(tasks.into_iter().map(Ok))
                 .zip(task_trigger)
                 .map(move |(task, dns)| task.resolve(&resolver, dns).map_err(|_| ()))
                 .buffer_unordered(qps)

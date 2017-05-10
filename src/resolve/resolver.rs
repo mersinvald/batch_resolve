@@ -99,7 +99,7 @@ impl TrustDNSResolver {
                       -> Box<Future<Item = Message, Error = ResolverError>> {
         Box::new(Self::resolve_retry(client_factory,
                                      self.timeout_retries,
-                                     Name::parse(&name, Some(&Name::root())).unwrap(),
+                                     Name::parse(name, Some(&Name::root())).unwrap(),
                                      DNSClass::IN,
                                      rtype))
     }
