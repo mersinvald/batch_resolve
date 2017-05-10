@@ -55,7 +55,7 @@ impl Config {
     }
 
     pub fn parse(&mut self, string: &str) -> ConfigResult<()> {
-        #[derive(Serialize, Deserialize, Debug)]
+        #[derive(Deserialize, Debug)]
         struct Config {
             dns: Option<Vec<String>>,
             retry: Option<u32>,
