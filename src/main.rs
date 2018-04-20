@@ -222,7 +222,7 @@ fn main() {
     // Merge all results with common output pathes
     let mut data_sinks = HashMap::new();
     for resolved in resolve_results {
-        let entry = data_sinks.entry(resolved.out_path).or_insert_with(HashSet::new);
+        let entry = data_sinks.entry(resolved.out_path).or_insert_with(Vec::new);
         (*entry).extend(resolved.resolved_rx);
     }
 

@@ -1,22 +1,3 @@
-[root]
-name = "batch_resolve_cli"
-version = "0.3.5"
-dependencies = [
- "clap 2.24.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
- "env_logger 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "indicatif 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "log 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "num_cpus 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-core 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "toml 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "trust-dns 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
 [[package]]
 name = "aho-corasick"
 version = "0.6.3"
@@ -61,6 +42,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "gcc 0.3.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "batch_resolve_cli"
+version = "0.3.5"
+dependencies = [
+ "clap 2.24.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "env_logger 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
+ "indicatif 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num_cpus 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-core 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "toml 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "trust-dns 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
