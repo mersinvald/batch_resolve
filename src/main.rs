@@ -38,33 +38,30 @@ use env_logger::LogBuilder;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
+fn process_args() -> (String, String, QueryType) {
     let app = App::new("Batch Resolve")
         .about("Fast asynchronous DNS batch resolver")
         .version(crate_version!())
         .author(crate_authors!())
-        .arg(Arg::with_name("inputs")
+        .arg(Arg::with_name("input")
             .help("Input file")
             .short("i")
             .long("in")
             .value_name("INPUT")
-            .multiple(true)
-            .number_of_values(1))
-        .arg(Arg::with_name("outputs")
+            .takes_value(true))
+        .arg(Arg::with_name("output")
             .help("Output file")
             .short("o")
             .long("out")
             .value_name("OUTPUT")
-            .multiple(true)
-            .number_of_values(1))
-        .arg(Arg::with_name("queries")
+            .takes_value(true))
+        .arg(Arg::with_name("query")
             .help("Query type")
             .short("q")
             .long("query")
             .possible_values(&QueryType::variants())
             .value_name("QUERY_TYPE")
-            .multiple(true)
-            .number_of_values(1))
+            .takes_value(true))
         .arg(Arg::with_name("config")
             .help("Sets a custom config file")
             .short("c")
@@ -93,23 +90,22 @@ fn process_args() -> (Vec<String>, Vec<String>, Vec<QueryType>) {
         4 | _ => setup_logger(LogLevelFilter::Trace),
     }
 
-    // Get arguments
-    let inputs  = values_t!(matches.values_of("inputs"),  String).unwrap_or(vec![]);
-    let outputs = values_t!(matches.values_of("outputs"), String).unwrap_or(vec![]);
-    let qtypes  = values_t!(matches.values_of("queries"), QueryType).unwrap_or(vec![]);
-
-    // Cardinalities should be the same
-    if inputs.len() != outputs.len() || outputs.len() != qtypes.len() || inputs.is_empty() {
-        error!("input, output and query arguments number must be the same and non-zero");
+    let print_help_and_die = |_| {
+        error!("input an output and arguments must not be missing");
         println!("{}", help_msg);
-        std::process::exit(1);
-    } 
+        std::process::exit(1)
+    };
+
+    // Get arguments
+    let input  = value_t!(matches.value_of("input"),  String).unwrap_or_else(print_help_and_die);
+    let output = value_t!(matches.value_of("output"), String).unwrap_or_else(print_help_and_die);
+    let query  = value_t!(matches.value_of("query"), QueryType).unwrap_or(QueryType::A);
 
     // Process config 
     process_config(matches.value_of("config"));
 
     // Return inputs, outputs and query types
-    (inputs, outputs, qtypes)
+    (input, output, query)
 }
 
 fn process_config(arg_path: Option<&str>) {
@@ -168,25 +164,23 @@ impl ResolveResult {
 }
 
 fn main() {
-    let (inputs, outputs, qtypes) = process_args();
+    let (input, output, query) = process_args();
 
     let mut overall_count = 0;
     let mut resolve_results = vec![];
     let mut batch = Batch::new();
 
-    for (&qtype, (input, output)) in qtypes.iter().zip(inputs.iter().zip(outputs.into_iter())) {
-        let input_data = load_file(input).unwrap_or_else(|err| {
-            error!("failed to open {:?}: {}", input, err);
-            std::process::exit(1);
-        });
+    let input_data = load_file(&input).unwrap_or_else(|err| {
+        error!("failed to open {:?}: {}", input, err);
+        std::process::exit(1);
+    });
 
-        overall_count += input_data.len();
+    overall_count += input_data.len();
 
-        let (resolved_tx, resolved_rx) = mpsc::channel();
-        let rresult = ResolveResult::new(resolved_rx, output);
-        batch.add_task(input_data, resolved_tx, qtype);
-        resolve_results.push(rresult);
-    }
+    let (resolved_tx, resolved_rx) = mpsc::channel();
+    let rresult = ResolveResult::new(resolved_rx, output);
+    batch.add_task(input_data, resolved_tx, query);
+    resolve_results.push(rresult);
 
     // Create status output thread and register status callback
     let status = Arc::new(Mutex::new(Status::default()));
