@@ -1,0 +1,159 @@
+version: 2.1
+
+aliases:
+  # -------------------------
+  #      ALIASES: Caches
+  # -------------------------
+  - &restore-deps-cache-ububtu
+    key: rust-cache-{{ arch }}-{{ checksum "Cargo.toml" }}-{{ .Environment.CIRCLE_JOB }}
+
+  - &save-deps-cache-ubuntu
+    key: rust-cache-{{ arch }}-{{ checksum "Cargo.toml" }}-{{ .Environment.CIRCLE_JOB }}
+    paths:
+      - /usr/local/cargo/registry
+      - /usr/local/rustup
+      - ~/project/target/
+
+  - &restore-deps-cache-rustup
+    key: rust-cache-musl-{{ arch }}-{{ checksum "Cargo.toml" }}-{{ .Environment.CIRCLE_JOB }}
+
+  - &save-deps-cache-rustup
+    key: rust-cache-musl-{{ arch }}-{{ checksum "Cargo.toml" }}-{{ .Environment.CIRCLE_JOB }}
+    paths:
+      - $HOME/.rustup/
+      - $HOME/.cargo/
+      - $HOME/project/target/
+  # -------------------------
+  #  ALIASES: Branch Filters
+  # -------------------------
+  - &filter-only-master
+    branches:
+      only: master
+
+defaults: &defaults
+  working_directory: ~/project
+  environment:
+    RUST_BACKTRACE: 1
+
+jobs:
+  test-linux:
+    <<: *defaults
+    docker:
+      - image: rust:latest
+    steps:
+      - checkout
+      - restore_cache: *restore-deps-cache-ububtu
+      - run:
+          name: Install Rust tools
+          command: |
+            rustup component add clippy
+            rustup component add rustfmt
+      - run:
+          command: cargo test --all
+          no_output_timeout: 1h
+      - save_cache: *save-deps-cache-ubuntu
+      - run: cargo clippy
+      - run: cargo fmt -- --check
+
+  build-linux:
+    <<: *defaults
+    docker:
+      - image: clux/muslrust:nightly
+    steps:
+      - checkout
+      - restore_cache: *restore-deps-cache-rustup
+      - run: cargo build --release
+      - save_cache: *save-deps-cache-rustup
+      - run:
+          name: Move binaries into bin/ directory
+          command: |
+            mkdir bin/
+            mv target/x86_64-unknown-linux-musl/release/batch-resolve ./bin/batch-resolve
+      - persist_to_workspace:
+          root: .
+          paths:
+            - bin/*
+
+  codecov:
+    <<: *defaults
+    machine: true
+    steps:
+      - checkout
+      - restore_cache: *restore-deps-cache-rustup
+      - run:
+          name: Install Rust
+          command: |
+            curl https://sh.rustup.rs -sSf | sh -s -- -y
+            echo 'export PATH=$HOME/.cargo/bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Install Tarpaulin
+          command: cargo tarpaulin --version || cargo install cargo-tarpaulin
+          environment:
+            RUSTFLAGS: --cfg procmacro2_semver_exempt
+      - run:
+          name: Generate coverage report
+          command: cargo tarpaulin --out Xml --all-features
+      - save_cache: *save-deps-cache-rustup
+      - run:
+          name: Upload to codecov.io
+          command: bash <(curl -s https://codecov.io/bash) -Z -f cobertura.xml
+
+  release-dry:
+    <<: *defaults
+    docker:
+      - image: etclabscore/semantic-rs
+    steps:
+      - setup_remote_docker
+      - checkout
+      # TODO: deb & rpm packaging
+      - attach_workspace:
+          at: /workspace
+      - run: semantic-rs --dry
+
+  release:
+    <<: *defaults
+    docker:
+      - image: etclabscore/semantic-rs
+    steps:
+      - setup_remote_docker
+      - checkout
+      - attach_workspace:
+          at: /workspace
+      - restore_cache: *restore-deps-cache-ububtu
+      # This unset is VERY important: without it --force-https cannot work
+      # For some reason CircleCI has a global override substituting git@ links instead of all https links
+      - run: git config --global --unset url.ssh://git@github.com.insteadof
+      - run: semantic-rs
+      - save_cache: *save-deps-cache-ubuntu
+
+
+workflows:
+  version: 2
+  analysis:
+    jobs:
+      - test-linux
+      - build-linux
+      - release-dry
+          requires:
+            - build-linux
+
+  release:
+    jobs:
+      - test-linux:
+          filters: *filter-only-master
+      - build-linux:
+          filters: *filter-only-master
+      - release-dry:
+          filters: *filter-only-master
+          requires:
+            - build-linux
+      - hold:
+          filters: *filter-only-master
+          type: approval
+          requires:
+            - test-linux
+            - release-dry
+      - release:
+          filters: *filter-only-master
+          requires:
+            - hold
