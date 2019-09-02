@@ -1,25 +1,25 @@
-use std::thread;
-use std::net::SocketAddr;
-use std::time::{Instant, Duration};
 use std::cell::Cell;
+use std::net::SocketAddr;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use tokio_core::reactor::Core;
-use futures::Stream;
-use futures::Sink;
-use futures::stream;
-use futures::Future;
 use futures::future;
+use futures::stream;
 use futures::sync::mpsc as future_mpsc;
+use futures::Future;
+use futures::Sink;
+use futures::Stream;
+use tokio_core::reactor::Core;
 
 use crossbeam;
 use num_cpus;
 
-use resolve::batch::ResolvedTx;
-use resolve::batch::QueryType;
-use resolve::batch::StatusTx;
-use resolve::resolver::TrustDNSResolver;
-use resolve::error::ResolverError;
 use config::CONFIG;
+use resolve::batch::QueryType;
+use resolve::batch::ResolvedTx;
+use resolve::batch::StatusTx;
+use resolve::error::ResolverError;
+use resolve::resolver::TrustDNSResolver;
 
 pub struct ResolverThreadPool {
     tasks: Vec<ResolveTask>,
@@ -66,10 +66,7 @@ impl ResolverThreadPool {
                 });
             }
 
-            let dns = CONFIG.read()
-                .unwrap()
-                .dns_list()
-                .to_vec();
+            let dns = CONFIG.read().unwrap().dns_list().to_vec();
             scope.spawn(move || {
                 debug!("Started qps trigger thread");
                 trigger.thread_main(dns);
@@ -146,10 +143,7 @@ impl TriggerTimer {
 
 struct ResolverThread;
 impl ResolverThread {
-    fn thread_main(tasks: Vec<ResolveTask>,
-                   status: StatusTx,
-                   task_trigger: TriggerRx,
-                   qps: usize) {
+    fn thread_main(tasks: Vec<ResolveTask>, status: StatusTx, task_trigger: TriggerRx, qps: usize) {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
 
@@ -177,18 +171,21 @@ pub struct ResolveTask {
 }
 
 impl ResolveTask {
-    pub fn resolve(&self,
-                   resolver: &TrustDNSResolver,
-                   dns: SocketAddr)
-                   -> Box<Future<Item = (), Error = ResolverError>> {
+    pub fn resolve(
+        &self,
+        resolver: &TrustDNSResolver,
+        dns: SocketAddr,
+    ) -> Box<Future<Item = (), Error = ResolverError>> {
         let tx = self.tx.clone();
 
-        let future = resolver.resolve(dns, &self.name, self.qtype).and_then(move |results| {
-            for result in results {
-                tx.send(result).unwrap()
-            }
-            Ok(())
-        });
+        let future = resolver
+            .resolve(dns, &self.name, self.qtype)
+            .and_then(move |results| {
+                for result in results {
+                    tx.send(result).unwrap()
+                }
+                Ok(())
+            });
 
         Box::new(future)
     }
