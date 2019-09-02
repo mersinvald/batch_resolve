@@ -1,28 +1,32 @@
-#[macro_use] extern crate lazy_static;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate serde_derive;
 extern crate serde;
 extern crate toml;
 
-#[macro_use] extern crate log;
-#[macro_use] extern crate clap;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate clap;
 extern crate env_logger;
 
+extern crate crossbeam;
 extern crate futures;
-extern crate trust_dns;
-extern crate tokio_core;
-extern crate crossbeam;  
-extern crate num_cpus;                                              
 extern crate indicatif;
+extern crate num_cpus;
+extern crate tokio_core;
+extern crate trust_dns;
 
-mod resolve;
 mod config;
-use resolve::*;
+mod resolve;
 use config::*;
+use resolve::*;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use std::io::{self, Read, Write};
 use std::fs::File;
+use std::io::{self, Read, Write};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -31,10 +35,10 @@ use std::sync::{Arc, Mutex};
 
 use std::env;
 
-use clap::{Arg, App};
+use clap::{App, Arg};
 
-use log::{LogRecord, LogLevelFilter};
 use env_logger::LogBuilder;
+use log::{LogLevelFilter, LogRecord};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -43,42 +47,51 @@ fn process_args() -> (String, String, QueryType) {
         .about("Fast asynchronous DNS batch resolver")
         .version(crate_version!())
         .author(crate_authors!())
-        .arg(Arg::with_name("input")
-            .help("Input file")
-            .short("i")
-            .long("in")
-            .value_name("INPUT")
-            .takes_value(true))
-        .arg(Arg::with_name("output")
-            .help("Output file")
-            .short("o")
-            .long("out")
-            .value_name("OUTPUT")
-            .takes_value(true))
-        .arg(Arg::with_name("query")
-            .help("Query type")
-            .short("q")
-            .long("query")
-            .possible_values(&QueryType::variants())
-            .value_name("QUERY_TYPE")
-            .takes_value(true))
-        .arg(Arg::with_name("config")
-            .help("Sets a custom config file")
-            .short("c")
-            .long("config")
-            .value_name("FILE")
-            .takes_value(true))
-        .arg(Arg::with_name("verbosity")
-            .help("Level of verbosity (-v -vv -vvv)")
-            .short("v")
-            .multiple(true)
+        .arg(
+            Arg::with_name("input")
+                .help("Input file")
+                .short("i")
+                .long("in")
+                .value_name("INPUT")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("output")
+                .help("Output file")
+                .short("o")
+                .long("out")
+                .value_name("OUTPUT")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("query")
+                .help("Query type")
+                .short("q")
+                .long("query")
+                .possible_values(&QueryType::variants())
+                .value_name("QUERY_TYPE")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("config")
+                .help("Sets a custom config file")
+                .short("c")
+                .long("config")
+                .value_name("FILE")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("verbosity")
+                .help("Level of verbosity (-v -vv -vvv)")
+                .short("v")
+                .multiple(true),
         );
 
     // Save help message to use later on errors
     let mut help_msg = Vec::new();
     app.write_help(&mut help_msg).unwrap();
     let help_msg = String::from_utf8(help_msg).unwrap();
-    
+
     let matches = app.get_matches();
 
     // Setup logging and with appropriate  verbosity level
@@ -97,11 +110,11 @@ fn process_args() -> (String, String, QueryType) {
     };
 
     // Get arguments
-    let input  = value_t!(matches.value_of("input"),  String).unwrap_or_else(print_help_and_die);
+    let input = value_t!(matches.value_of("input"), String).unwrap_or_else(print_help_and_die);
     let output = value_t!(matches.value_of("output"), String).unwrap_or_else(print_help_and_die);
-    let query  = value_t!(matches.value_of("query"), QueryType).unwrap_or(QueryType::A);
+    let query = value_t!(matches.value_of("query"), QueryType).unwrap_or(QueryType::A);
 
-    // Process config 
+    // Process config
     process_config(matches.value_of("config"));
 
     // Return inputs, outputs and query types
@@ -110,24 +123,31 @@ fn process_args() -> (String, String, QueryType) {
 
 fn process_config(arg_path: Option<&str>) {
     // Config locations in priority-descending order
-    let default_config_locations =
-        vec!["batch_resolve.toml", "$HOME/.config/batch_resolve.toml", "/etc/batch_resolve.toml"];
+    let default_config_locations = vec![
+        "batch_resolve.toml",
+        "$HOME/.config/batch_resolve.toml",
+        "/etc/batch_resolve.toml",
+    ];
 
     let config_file = if let Some(arg_path) = arg_path {
         // Custom config is the only option when it is passed
         info!("Custom config path passed: {:?}", arg_path);
         let file = File::open(arg_path).unwrap_or_else(|error| {
-            error!("failed to open custom config file {:?}: {}", arg_path, error);
+            error!(
+                "failed to open custom config file {:?}: {}",
+                arg_path, error
+            );
             std::process::exit(1);
         });
         Some(file)
     } else {
-        default_config_locations.iter()
-            .filter_map(|path| File::open(path)
-                .map_err(|err| debug!("failed to open default config file {:?}: {}",
-                               path,
-                               err))
-                .ok())
+        default_config_locations
+            .iter()
+            .filter_map(|path| {
+                File::open(path)
+                    .map_err(|err| debug!("failed to open default config file {:?}: {}", path, err))
+                    .ok()
+            })
             .next()
     };
 
@@ -135,10 +155,14 @@ fn process_config(arg_path: Option<&str>) {
     if let Some(mut config_file) = config_file {
         let mut config_str = String::new();
         config_file.read_to_string(&mut config_str).unwrap();
-        CONFIG.write().unwrap().parse(&config_str).unwrap_or_else(|e| {
-            error!("malformed configuration file:\n {}", e);
-            std::process::exit(1);
-        });
+        CONFIG
+            .write()
+            .unwrap()
+            .parse(&config_str)
+            .unwrap_or_else(|e| {
+                error!("malformed configuration file:\n {}", e);
+                std::process::exit(1);
+            });
     }
 
     // Info to make sure right config is loaded on startup
@@ -186,7 +210,9 @@ fn main() {
     let status = Arc::new(Mutex::new(Status::default()));
     let callback_status = status.clone();
 
-    batch.register_status_callback(Box::new(move |s: Status| { *callback_status.lock().unwrap() = s; }));
+    batch.register_status_callback(Box::new(move |s: Status| {
+        *callback_status.lock().unwrap() = s;
+    }));
 
     thread::spawn(move || {
         debug!("Starting status printer thread");
@@ -216,7 +242,9 @@ fn main() {
     // Merge all results with common output pathes
     let mut data_sinks = HashMap::new();
     for resolved in resolve_results {
-        let entry = data_sinks.entry(resolved.out_path).or_insert_with(HashSet::new);
+        let entry = data_sinks
+            .entry(resolved.out_path)
+            .or_insert_with(HashSet::new);
         (*entry).extend(resolved.resolved_rx);
     }
 
@@ -233,9 +261,7 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
     Ok(buffer.lines().map(String::from).collect())
 }
 
-fn write_file<I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I,
-                                                              path: P)
-                                                              -> io::Result<()> {
+fn write_file<I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I, path: P) -> io::Result<()> {
     // Open file for writing
     let mut file = File::create(path)?;
 

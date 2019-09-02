@@ -1,26 +1,26 @@
-use std::str;
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::borrow::Borrow;
+use std::str;
 
-use futures::Future;
 use futures::future;
 use futures::future::Loop;
+use futures::Future;
 use tokio_core::reactor::Handle;
 
-use trust_dns::client::{ClientFuture, BasicClientHandle, ClientHandle};
-use trust_dns::udp::UdpClientStream;
+use trust_dns::client::{BasicClientHandle, ClientFuture, ClientHandle};
 use trust_dns::error::ClientError;
+use trust_dns::error::ClientErrorKind;
+use trust_dns::op::message::Message;
+use trust_dns::rr::dns_class::DNSClass;
 use trust_dns::rr::domain::Name;
 use trust_dns::rr::record_type::RecordType;
-use trust_dns::rr::dns_class::DNSClass;
 use trust_dns::rr::resource::Record;
-use trust_dns::op::message::Message;
-use trust_dns::error::ClientErrorKind;
+use trust_dns::udp::UdpClientStream;
 
-use resolve::error::*;
-use resolve::batch::{StatusTx, ResolveStatus, QueryType};
 use config::CONFIG;
+use resolve::batch::{QueryType, ResolveStatus, StatusTx};
+use resolve::error::*;
 
 fn make_client(loop_handle: Handle, name_server: SocketAddr) -> BasicClientHandle {
     let (stream, stream_handle) = UdpClientStream::new(name_server, loop_handle.clone());
@@ -62,17 +62,18 @@ impl TrustDNSResolver {
         TrustDNSResolver {
             loop_handle: loop_handle.clone(),
             status_tx: status_tx,
-            timeout_retries: CONFIG.read().unwrap().timeout_retries()
+            timeout_retries: CONFIG.read().unwrap().timeout_retries(),
         }
     }
 }
 
 impl TrustDNSResolver {
-    pub fn resolve(&self,
-                   dns: SocketAddr,
-                   name: &str,
-                   query_type: QueryType)
-                   -> Box<Future<Item = Vec<String>, Error = ResolverError>> {
+    pub fn resolve(
+        &self,
+        dns: SocketAddr,
+        name: &str,
+        query_type: QueryType,
+    ) -> Box<Future<Item = Vec<String>, Error = ResolverError>> {
         let client_factory = ClientFactory::new(self.loop_handle.clone(), dns);
 
         self.status_tx.send(ResolveStatus::Started).unwrap();
@@ -84,7 +85,8 @@ impl TrustDNSResolver {
         };
 
         let name = name.to_owned();
-        let future = future.map(move |msg| msg.extract_answer(query_type))
+        let future = future
+            .map(move |msg| msg.extract_answer(query_type))
             .then(move |rv| rv.report_status(&name, status_tx))
             .then(move |rv| rv.partial_ok());
 
@@ -92,23 +94,27 @@ impl TrustDNSResolver {
     }
 
     // Simple DNS lookup queries
-    fn simple_resolve(&self,
-                      client_factory: ClientFactory,
-                      name: &str,
-                      rtype: RecordType)
-                      -> Box<Future<Item = Message, Error = ResolverError>> {
-        Box::new(Self::resolve_retry(client_factory,
-                                     self.timeout_retries,
-                                     Name::parse(name, Some(&Name::root())).unwrap(),
-                                     DNSClass::IN,
-                                     rtype))
+    fn simple_resolve(
+        &self,
+        client_factory: ClientFactory,
+        name: &str,
+        rtype: RecordType,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
+        Box::new(Self::resolve_retry(
+            client_factory,
+            self.timeout_retries,
+            Name::parse(name, Some(&Name::root())).unwrap(),
+            DNSClass::IN,
+            rtype,
+        ))
     }
 
     // Reverse DNS queries
-    fn reverse_resolve(&self,
-                       client_factory: ClientFactory,
-                       ip: &str)
-                       -> Box<Future<Item = Message, Error = ResolverError>> {
+    fn reverse_resolve(
+        &self,
+        client_factory: ClientFactory,
+        ip: &str,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
         let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
         labels.reverse();
 
@@ -118,12 +124,13 @@ impl TrustDNSResolver {
     }
 
     // Recursive DNS request for PTR queries
-    fn recurse_ptr(&self,
-                   client_factory: ClientFactory,
-                   name: Name,
-                   query_class: DNSClass,
-                   record_type: RecordType)
-                   -> Box<Future<Item = Message, Error = ResolverError>> {
+    fn recurse_ptr(
+        &self,
+        client_factory: ClientFactory,
+        name: Name,
+        query_class: DNSClass,
+        record_type: RecordType,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
         // Because recursion is not possible with futures this implementation of Depth-First lookup
         // uses state with discovered nameservers excluding visited ones to avoid infinite loops
         struct State {
@@ -138,15 +145,17 @@ impl TrustDNSResolver {
             pub fn pop_ns(&mut self) -> Option<NS> {
                 self.nameservers.pop().map(|ns| {
                     self.visited.insert(ns.clone());
-                    ns    
+                    ns
                 })
             }
 
             pub fn push_nameservers<I, B>(&mut self, iter: I)
-                where I: IntoIterator<Item = B>,
-                      B: Borrow<Name>
+            where
+                I: IntoIterator<Item = B>,
+                B: Borrow<Name>,
             {
-                let new_nameservers = iter.into_iter()
+                let new_nameservers = iter
+                    .into_iter()
                     .map(NS::try_from)
                     .filter_map(Result::ok)
                     .filter(|ns| !self.visited.contains(ns))
@@ -174,8 +183,11 @@ impl TrustDNSResolver {
                 state.client_factory.clone(),
                 timeout_retries,
                 state.pop_ns().unwrap(),
-                name.clone(), query_class, record_type
-            ).map(move |message| {
+                name.clone(),
+                query_class,
+                record_type,
+            )
+            .map(move |message| {
                 state.push_nameservers(message.name_servers().iter().map(Record::name));
                 state.add_answer(message);
                 state
@@ -198,64 +210,76 @@ impl TrustDNSResolver {
         }))
     }
 
-    // Perform DNS query with some nameserver. 
+    // Perform DNS query with some nameserver.
     // If nameserver is not a SocketAddr, resolve the domain first.
-    fn resolve_with_ns(loop_handle: Handle,
-                        client_factory: ClientFactory,
-                        timeout_retries: u32,
-                        nameserver: NS,
-                        name: Name,
-                        query_class: DNSClass,
-                        record_type: RecordType)
-                        -> Box<Future<Item = Message, Error = ResolverError>> {
-        debug!("Resolving {:?} with nameserver {:?}", name.to_string(), nameserver.to_string());
-        let ns_resolve: Box<Future<Item=Option<SocketAddr>, Error=ResolverError>> = match nameserver {
-            NS::Known(addr) => future::ok(Some(addr)).boxed(),
-            NS::Unknown(domain) => {
-                Box::new(Self::resolve_retry(
-                    client_factory.clone(),
-                    timeout_retries,
-                    Name::parse(&domain, Some(&Name::root())).unwrap(), 
-                    DNSClass::IN, 
-                    RecordType::A,
-                ).map(|msg| msg.extract_answer(QueryType::A)
-                    .into_iter().nth(0)
-                    .map(|mut ip| { ip.push_str(":53"); ip } )
-                        .and_then(|ip| ip.parse::<SocketAddr>()
-                            .map_err(|e| {
-                                error!("Invalid IP({:?}): {:?}", ip, e);
-                                e
+    fn resolve_with_ns(
+        loop_handle: Handle,
+        client_factory: ClientFactory,
+        timeout_retries: u32,
+        nameserver: NS,
+        name: Name,
+        query_class: DNSClass,
+        record_type: RecordType,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
+        debug!(
+            "Resolving {:?} with nameserver {:?}",
+            name.to_string(),
+            nameserver.to_string()
+        );
+        let ns_resolve: Box<Future<Item = Option<SocketAddr>, Error = ResolverError>> =
+            match nameserver {
+                NS::Known(addr) => future::ok(Some(addr)).boxed(),
+                NS::Unknown(domain) => Box::new(
+                    Self::resolve_retry(
+                        client_factory.clone(),
+                        timeout_retries,
+                        Name::parse(&domain, Some(&Name::root())).unwrap(),
+                        DNSClass::IN,
+                        RecordType::A,
+                    )
+                    .map(|msg| {
+                        msg.extract_answer(QueryType::A)
+                            .into_iter()
+                            .nth(0)
+                            .map(|mut ip| {
+                                ip.push_str(":53");
+                                ip
                             })
-                            .ok()
-                )))
-            }
-        };
-    
-        
-        let future = ns_resolve.then(move |result| {
-            match result {
-                Ok(Some(nameserver)) => Self::resolve_retry(
-                                        ClientFactory::new(loop_handle, nameserver),
-                                        timeout_retries,
-                                        name.clone(),
-                                        query_class, 
-                                        record_type),
-                Ok(None) => future::err(ResolverError::NameServerNotResolved).boxed(),
-                Err(err) => future::err(err).boxed(),
+                            .and_then(|ip| {
+                                ip.parse::<SocketAddr>()
+                                    .map_err(|e| {
+                                        error!("Invalid IP({:?}): {:?}", ip, e);
+                                        e
+                                    })
+                                    .ok()
+                            })
+                    }),
+                ),
+            };
 
-            }
+        let future = ns_resolve.then(move |result| match result {
+            Ok(Some(nameserver)) => Self::resolve_retry(
+                ClientFactory::new(loop_handle, nameserver),
+                timeout_retries,
+                name.clone(),
+                query_class,
+                record_type,
+            ),
+            Ok(None) => future::err(ResolverError::NameServerNotResolved).boxed(),
+            Err(err) => future::err(err).boxed(),
         });
 
         Box::new(future)
     }
 
     // Retry-on-timeout enabled resolve
-    fn resolve_retry(client_factory: ClientFactory,
-                     timeout_retries: u32,
-                     name: Name,
-                     query_class: DNSClass,
-                     record_type: RecordType)
-                     -> Box<Future<Item = Message, Error = ResolverError>> {
+    fn resolve_retry(
+        client_factory: ClientFactory,
+        timeout_retries: u32,
+        name: Name,
+        query_class: DNSClass,
+        record_type: RecordType,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
         struct State {
             tries_left: u32,
             message: Option<Message>,
@@ -296,50 +320,51 @@ impl TrustDNSResolver {
 
         let retry_loop = {
             future::loop_fn(state, move |state| {
-                Self::_resolve(client_factory.new_client(), name.clone(), query_class, record_type)
-                    .then(move |result| match result {
-                        Ok(message) => {
-                            trace!("Received DNS message: {:?}", message.answers()); 
-                            Ok(Loop::Break(state.with_message(message))) 
-                        },
-                        Err(err) => match *err.kind() {
-                            ClientErrorKind::Timeout => {
-                                state.next_step()
-                            },
-                            ClientErrorKind::Canceled(e) => {
-                                if !state.has_next_step() { 
-                                    error!("{}", e) 
-                                }
-                                state.next_step()
-                            },
-                            _  => Err(ResolverError::DnsClientError(err))
-                        },
-                    }
+                Self::_resolve(
+                    client_factory.new_client(),
+                    name.clone(),
+                    query_class,
+                    record_type,
                 )
+                .then(move |result| match result {
+                    Ok(message) => {
+                        trace!("Received DNS message: {:?}", message.answers());
+                        Ok(Loop::Break(state.with_message(message)))
+                    }
+                    Err(err) => match *err.kind() {
+                        ClientErrorKind::Timeout => state.next_step(),
+                        ClientErrorKind::Canceled(e) => {
+                            if !state.has_next_step() {
+                                error!("{}", e)
+                            }
+                            state.next_step()
+                        }
+                        _ => Err(ResolverError::DnsClientError(err)),
+                    },
+                })
             })
         };
-        
-        let future = retry_loop.then(move |result| {
-            match result {
-                Ok(state) => {
-                    let message = state.into_message();
-                    match message {
-                        Some(message) => Ok(message),
-                        None => Err(ResolverError::ConnectionTimeout),
-                    }
-                },
-                Err(err) => Err(err)
+
+        let future = retry_loop.then(move |result| match result {
+            Ok(state) => {
+                let message = state.into_message();
+                match message {
+                    Some(message) => Ok(message),
+                    None => Err(ResolverError::ConnectionTimeout),
+                }
             }
+            Err(err) => Err(err),
         });
 
         Box::new(future)
     }
 
-    fn _resolve(mut client: BasicClientHandle,
-                name: Name,
-                query_class: DNSClass,
-                record_type: RecordType)
-                -> Box<Future<Item = Message, Error = ClientError>> {
+    fn _resolve(
+        mut client: BasicClientHandle,
+        name: Name,
+        query_class: DNSClass,
+        record_type: RecordType,
+    ) -> Box<Future<Item = Message, Error = ClientError>> {
         Box::new(client.query(name, query_class, record_type))
     }
 }
@@ -347,14 +372,16 @@ impl TrustDNSResolver {
 use trust_dns::rr::RData;
 
 trait FromRecord<B>
-    where B: Borrow<Record>,
-          Self: Sized
+where
+    B: Borrow<Record>,
+    Self: Sized,
 {
     fn from(r: B, qtype: QueryType) -> Option<Self>;
 }
 
 impl<B> FromRecord<B> for String
-    where B: Borrow<Record>
+where
+    B: Borrow<Record>,
 {
     fn from(r: B, qtype: QueryType) -> Option<Self> {
         let r = r.borrow();
@@ -403,19 +430,16 @@ impl<T> ReportStatus for Result<Vec<T>, ResolverError> {
                     status_tx.send(ResolveStatus::Success).unwrap();
                 }
             }
-            Err(error) => {
-                match *error {
-                    ResolverError::ConnectionTimeout |
-                    ResolverError::NameServerNotResolved => {
-                        debug!("failed to resolve {:?}: {}", name, error);
-                        status_tx.send(ResolveStatus::Failure).unwrap();
-                    }
-                    _ => {
-                        error!("failed to resolve {:?}: {}", name, error);
-                        status_tx.send(ResolveStatus::Error).unwrap();
-                    }
+            Err(error) => match *error {
+                ResolverError::ConnectionTimeout | ResolverError::NameServerNotResolved => {
+                    debug!("failed to resolve {:?}: {}", name, error);
+                    status_tx.send(ResolveStatus::Failure).unwrap();
                 }
-            }
+                _ => {
+                    error!("failed to resolve {:?}: {}", name, error);
+                    status_tx.send(ResolveStatus::Error).unwrap();
+                }
+            },
         }
         self
     }
@@ -428,9 +452,9 @@ trait PartialOk<T> {
 impl<T> PartialOk<T> for Result<Vec<T>, ResolverError> {
     fn partial_ok(self) -> Result<Vec<T>, ResolverError> {
         match self {
-            Err(ResolverError::ConnectionTimeout) |
-            Err(ResolverError::NameServerNotResolved) |
-            Err(ResolverError::NotFound) => Ok(vec![]),
+            Err(ResolverError::ConnectionTimeout)
+            | Err(ResolverError::NameServerNotResolved)
+            | Err(ResolverError::NotFound) => Ok(vec![]),
             Ok(vec) => Ok(vec),
             Err(err) => Err(err),
         }
@@ -452,7 +476,8 @@ impl NS {
     }
 
     pub fn try_from<B>(name: B) -> Result<NS, ()>
-        where B: Borrow<Name>
+    where
+        B: Borrow<Name>,
     {
         let name = name.borrow();
         if name.num_labels() != 0 {

@@ -1,7 +1,7 @@
-use std::fmt;
-use std::sync::{Arc, RwLock};
-use std::net::AddrParseError;
 use std::error::Error;
+use std::fmt;
+use std::net::AddrParseError;
+use std::sync::{Arc, RwLock};
 use toml;
 
 use std::net::SocketAddr;
@@ -9,14 +9,10 @@ use std::net::SocketAddr;
 pub type ConfigResult<T> = Result<T, ConfigError>;
 
 lazy_static! {
-    static ref DEFAULT_DNS_SERVERS: Vec<SocketAddr> = vec![
-        "8.8.8.8:53".parse().unwrap(),
-        "8.8.4.4:53".parse().unwrap(),
-    ];
-
+    static ref DEFAULT_DNS_SERVERS: Vec<SocketAddr> =
+        vec!["8.8.8.8:53".parse().unwrap(), "8.8.4.4:53".parse().unwrap(),];
     static ref DEFAULT_TIMEOUT_RETRIES: u32 = 10;
     static ref DEFAULT_QPS: u32 = 500;
-
     pub static ref CONFIG: Arc<RwLock<Config>> = Arc::new(RwLock::new(Config::new()));
 }
 
