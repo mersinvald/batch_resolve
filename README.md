@@ -1,4 +1,3 @@
-[![Build Status](https://travis-ci.org/mersinvald/batch_resolve.svg?branch=master)](https://travis-ci.org/mersinvald/batch_resolve)
 [![Crates.io](https://img.shields.io/crates/v/batch_resolve_cli.svg)](https://crates.io/crates/batch_resolve_cli)
 [![Gitter](https://img.shields.io/badge/GITTER-join%20chat-green.svg)](https://gitter.im/batch_resolve/Lobby?utm_source=share-link&utm_medium=link&utm_campaign=share-link)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.me/mersinvald)
