@@ -129,22 +129,11 @@ jobs:
 
 workflows:
   version: 2
-  analysis:
+  ci:
     jobs:
       - test-linux
       - build-linux
-      - release-dry
-          requires:
-            - build-linux
-
-  release:
-    jobs:
-      - test-linux:
-          filters: *filter-only-master
-      - build-linux:
-          filters: *filter-only-master
       - release-dry:
-          filters: *filter-only-master
           requires:
             - build-linux
       - hold:
