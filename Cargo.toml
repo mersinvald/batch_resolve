@@ -8,13 +8,9 @@ repository = "http://github.com/mersinvald/batch_resolve"
 readme = "README.md"
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "mersinvald/batch_resolve" }
-
 [[bin]]
 name = "batch-resolve"
 path = "src/main.rs"
-
 
 [dependencies]
 futures = "0.1.11"
