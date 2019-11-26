@@ -1,8 +1,8 @@
 use std::sync::mpsc;
 use std::thread;
 
-use resolve::resolver_threadpool::ResolverThreadPool;
 use resolve::resolver_threadpool::ResolveTask;
+use resolve::resolver_threadpool::ResolverThreadPool;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Status {
@@ -27,7 +27,8 @@ pub type ResolvedTx = mpsc::Sender<String>;
 pub type ResolvedRx = mpsc::Receiver<String>;
 
 pub struct Batch<I>
-    where I: IntoIterator<Item = String> + 'static
+where
+    I: IntoIterator<Item = String> + 'static,
 {
     tasks: Vec<BatchTask<I>>,
     outputs: Vec<ResolvedTx>,
@@ -35,7 +36,8 @@ pub struct Batch<I>
 }
 
 impl<I> Batch<I>
-    where I: IntoIterator<Item = String> + 'static
+where
+    I: IntoIterator<Item = String> + 'static,
 {
     pub fn new() -> Self {
         Batch {
@@ -107,7 +109,7 @@ impl<I> Batch<I>
     }
 }
 
-arg_enum!{
+arg_enum! {
     #[derive(Copy, Clone, Debug)]
     pub enum QueryType {
         A,
@@ -130,14 +132,16 @@ impl Into<RecordType> for QueryType {
 }
 
 pub struct BatchTask<I>
-    where I: IntoIterator<Item = String>
+where
+    I: IntoIterator<Item = String>,
 {
     input: I,
     qtype: QueryType,
 }
 
 impl<I> BatchTask<I>
-    where I: IntoIterator<Item = String> + 'static
+where
+    I: IntoIterator<Item = String> + 'static,
 {
     fn new(input: I, qtype: QueryType) -> Self {
         BatchTask {

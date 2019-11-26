@@ -1,5 +1,5 @@
-use std::fmt;
 use std::error::Error;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum ResolverError {
@@ -21,7 +21,7 @@ impl Error for ResolverError {
     fn description(&self) -> &str {
         match *self {
             ResolverError::ConnectionTimeout => "Connection timeout",
-            ResolverError::NameServerNotResolved => "Failed to resolve nameserver", 
+            ResolverError::NameServerNotResolved => "Failed to resolve nameserver",
             ResolverError::NotFound => "Not found",
             ResolverError::DnsClientError(ref err) => err.description(),
         }
