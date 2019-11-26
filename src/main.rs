@@ -260,16 +260,33 @@ fn load_file<P: AsRef<Path>>(path: P) -> io::Result<HashSet<String>> {
     Ok(buffer.lines().map(String::from).collect())
 }
 
-fn write_file<I: IntoIterator<Item = String>, P: AsRef<Path>>(data: I, path: P) -> io::Result<()> {
+fn write_file<I: IntoIterator<Item = (String, String)>, P: AsRef<Path>>(
+    data: I,
+    path: P,
+) -> io::Result<()> {
     // Open file for writing
-    let mut file = File::create(path)?;
+    let mut file = File::create(path.as_ref())?;
+
+    // If file's extension is `cvs`, we wanna output pairs, and not just the results
+    let csv_mode = path.as_ref().extension().map_or(false, |ext| ext == "csv");
 
     // Sort and output data
     let mut data = data.into_iter().collect::<Vec<_>>();
-    data.sort();
-    for item in &data {
-        file.write_all(item.as_bytes())?;
-        file.write_all(b"\n")?;
+
+    if csv_mode {
+        data.sort_by(|a, b| a.0.cmp(&b.0));
+        for (from, to) in &data {
+            file.write_all(from.as_bytes())?;
+            file.write_all(b" ")?;
+            file.write_all(to.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
+    } else {
+        data.sort_by(|a, b| a.1.cmp(&b.1));
+        for (_, to) in &data {
+            file.write_all(to.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
     }
 
     Ok(())

@@ -23,8 +23,8 @@ pub enum ResolveStatus {
     Error,
 }
 
-pub type ResolvedTx = mpsc::Sender<String>;
-pub type ResolvedRx = mpsc::Receiver<String>;
+pub type ResolvedTx = mpsc::Sender<(String, String)>;
+pub type ResolvedRx = mpsc::Receiver<(String, String)>;
 
 pub struct Batch<I>
 where
