@@ -101,19 +101,19 @@ jobs:
   release-dry:
     <<: *defaults
     docker:
-      - image: etclabscore/semantic-rs
+      - image: semanteecore/semanteecore
     steps:
       - setup_remote_docker
       - checkout
       # TODO: deb & rpm packaging
       - attach_workspace:
           at: /workspace
-      - run: semantic-rs --dry
+      - run: semanteecore --dry
 
   release:
     <<: *defaults
     docker:
-      - image: etclabscore/semantic-rs
+      - image: semanteecore/semanteecore
     steps:
       - setup_remote_docker
       - checkout
@@ -123,7 +123,7 @@ jobs:
       # This unset is VERY important: without it --force-https cannot work
       # For some reason CircleCI has a global override substituting git@ links instead of all https links
       - run: git config --global --unset url.ssh://git@github.com.insteadof
-      - run: semantic-rs
+      - run: semanteecore
       - save_cache: *save-deps-cache-ubuntu
 
 
