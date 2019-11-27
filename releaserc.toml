@@ -12,7 +12,7 @@ generate_notes = "clog"
 prepare = "discover"
 verify_release = "discover"
 commit = "git"
-publish = [ "github" ]
+publish = [ "github", "rust" ]
 notify = "discover"
 
 [cfg.clog]

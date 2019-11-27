@@ -58,7 +58,7 @@ jobs:
   build-linux:
     <<: *defaults
     docker:
-      - image: clux/muslrust:nightly
+      - image: clux/muslrust:stable
     steps:
       - checkout
       - restore_cache: *restore-deps-cache-rustup
@@ -101,19 +101,19 @@ jobs:
   release-dry:
     <<: *defaults
     docker:
-      - image: etclabscore/semantic-rs
+      - image: semanteecore/semanteecore
     steps:
       - setup_remote_docker
       - checkout
       # TODO: deb & rpm packaging
       - attach_workspace:
           at: /workspace
-      - run: semantic-rs --dry
+      - run: semanteecore --dry
 
   release:
     <<: *defaults
     docker:
-      - image: etclabscore/semantic-rs
+      - image: semanteecore/semanteecore
     steps:
       - setup_remote_docker
       - checkout
@@ -123,28 +123,17 @@ jobs:
       # This unset is VERY important: without it --force-https cannot work
       # For some reason CircleCI has a global override substituting git@ links instead of all https links
       - run: git config --global --unset url.ssh://git@github.com.insteadof
-      - run: semantic-rs
+      - run: semanteecore
       - save_cache: *save-deps-cache-ubuntu
 
 
 workflows:
   version: 2
-  analysis:
+  ci:
     jobs:
       - test-linux
       - build-linux
-      - release-dry
-          requires:
-            - build-linux
-
-  release:
-    jobs:
-      - test-linux:
-          filters: *filter-only-master
-      - build-linux:
-          filters: *filter-only-master
       - release-dry:
-          filters: *filter-only-master
           requires:
             - build-linux
       - hold:
