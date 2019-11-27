@@ -177,12 +177,13 @@ impl ResolveTask {
         dns: SocketAddr,
     ) -> Box<Future<Item = (), Error = ResolverError>> {
         let tx = self.tx.clone();
+        let name = self.name.clone();
 
         let future = resolver
             .resolve(dns, &self.name, self.qtype)
             .and_then(move |results| {
                 for result in results {
-                    tx.send(result).unwrap()
+                    tx.send((name.clone(), result)).unwrap()
                 }
                 Ok(())
             });
