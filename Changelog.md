@@ -1,3 +1,13 @@
+<a name="v0.3.7"></a>
+## v0.3.7 (2019-11-27)
+
+
+#### Bug Fixes
+
+*   rename crate back to batch_resolve_cli ([ea93d4d9](ea93d4d9))
+
+
+
 <a name="v0.3.6"></a>
 ## v0.3.6 (2019-11-27)
 
