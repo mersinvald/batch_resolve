@@ -3,7 +3,7 @@ name = 'batch-resolve'
 path = 'src/main.rs'
 
 [package]
-name = 'batch-resolve-cli'
+name = 'batch_resolve_cli'
 description = 'Fast asynchronous batch DNS resolver built on top of Tokio and TRust-DNS'
 version = '0.3.6'
 authors = ['Mike Lubinets <lubinetsm@yandex.ru>']
