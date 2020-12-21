@@ -11,6 +11,7 @@ Fast asynchronous DNS resolver
 ## Support notice
 
 `batch-resolve` isn't actively maintained anymore, but I'll be happy to accept Pull Requests and release new versions, if anyone would be desperate enough to try and dig through the futures 0.1 spaghetti :) 
+
 If you use this tool and encounter critical bugs, let me know in the issues -- I'll try to find time to take a look.
 
 ## Install
