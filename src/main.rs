@@ -277,7 +277,7 @@ fn write_file<I: IntoIterator<Item = (String, String)>, P: AsRef<Path>>(
         data.sort_by(|a, b| a.0.cmp(&b.0));
         for (from, to) in &data {
             file.write_all(from.as_bytes())?;
-            file.write_all(b" ")?;
+            file.write_all(b",")?;
             file.write_all(to.as_bytes())?;
             file.write_all(b"\n")?;
         }
