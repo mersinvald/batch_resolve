@@ -115,7 +115,10 @@ arg_enum! {
         A,
         AAAA,
         PTR,
-        NS
+        NS,
+        MX,
+        CNAME,
+        TXT
     }
 }
 
@@ -127,6 +130,9 @@ impl Into<RecordType> for QueryType {
             QueryType::AAAA => RecordType::AAAA,
             QueryType::PTR => RecordType::PTR,
             QueryType::NS => RecordType::NS,
+            QueryType::MX => RecordType::MX,
+            QueryType::CNAME => RecordType::CNAME,
+            QueryType::TXT => RecordType::TXT,
         }
     }
 }

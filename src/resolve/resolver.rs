@@ -81,6 +81,8 @@ impl TrustDNSResolver {
 
         let future = match query_type {
             QueryType::PTR => self.reverse_resolve(client_factory, name),
+            QueryType::MX => self.resolve_mx(client_factory, name),
+            // QueryType::MX => self.reverse_resolve(client_factory, name),
             _ => self.simple_resolve(client_factory, name, query_type.into()),
         };
 
@@ -107,6 +109,34 @@ impl TrustDNSResolver {
             DNSClass::IN,
             rtype,
         ))
+    }
+
+    // Resolve MX
+    // fn resolve_mx(
+    //     &self,
+    //     client_factory:ClientFactory,
+    //     name:&str,
+    //     rtype:RecordType,
+    // ) -> Box<Future<Item = Message, Error = ResolverError>> {
+    //     Box::new(Self::resolve_retry(
+    //         client_factory,
+    //         self.timeout_retries,
+    //         Name::parse(name,Some(&Name::root())).unwrap(),
+    //         DNSClass::IN,
+    //         rtype,
+    //     ))
+    // }
+    fn resolve_mx(
+        &self,
+        client_factory: ClientFactory,
+        ip: &str,
+    ) -> Box<Future<Item = Message, Error = ResolverError>> {
+        let mut labels = ip.split('.').map(str::to_owned).collect::<Vec<_>>();
+        labels.reverse();
+
+        let name = Name::with_labels(labels).label("in-addr").label("arpa");
+        let test = self.mx_lookup()
+        Box::new(self.recurse_ptr(client_factory, name, DNSClass::IN, RecordType::MX))
     }
 
     // Reverse DNS queries
@@ -460,6 +490,33 @@ impl<T> PartialOk<T> for Result<Vec<T>, ResolverError> {
         }
     }
 }
+
+// #[derive(Debug, Hash, Eq, PartialEq, Clone)]
+// enum MX {
+//     Known(SocketAddr),
+//     Unknown(String),
+// }
+
+// impl MX {
+//     pub fn to_string(&self) -> String {
+//         match *self {
+//             MX::Known(ref addr) => addr.to_string(),
+//             MX::Unknown(ref dom) => dom.clone(),
+//         }
+//     }
+
+//     // pub fn try_from<B>(name: B) -> Result<NS, ()>
+//     // where
+//     //     B: Borrow<Name>,
+//     // {
+//     //     let name = name.borrow();
+//     //     if name.num_labels() != 0 {
+//     //         Ok(NS::Unknown(name.to_string()))
+//     //     } else {
+//     //         Err(())
+//     //     }
+//     // }
+// }
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 enum NS {
