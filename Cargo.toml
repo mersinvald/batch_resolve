@@ -30,5 +30,8 @@ indicatif = '0.1.0'
 version = '0.10'
 default-features = false
 features = ['openssl']
+# path = "/Users/uniacid/Sites/Xivg/trust-dns-0.10.1"
+git = "https://github.com/analyzemail/trust-dns"
+branch = "main"
 [profile.release]
 lto = true
